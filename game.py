@@ -6,6 +6,8 @@ import sys
 import os
 import time
 import random
+import json
+import pygame.font
 
 # Инициализация Pygame
 pygame.init()
@@ -43,6 +45,21 @@ PLATFORM_HEIGHT = 50
 SHADOW_HEIGHT = 400  
 SHADOW_ALPHA = 200  
 
+# Константы для диалогов
+DIALOG_PADDING = 20
+DIALOG_WIDTH = 700
+DIALOG_HEIGHT = 200
+CHOICE_HEIGHT = 40
+CHOICE_PADDING = 10
+FONT_SIZE = 24
+TEXT_COLOR = (255, 255, 255)
+CHOICE_COLOR = (200, 200, 200)
+CHOICE_HOVER_COLOR = (255, 255, 100)
+DIALOG_TRIGGER_DISTANCE = 150
+DIALOG_PROMPT_COLOR = (255, 255, 100)
+CHOICE_INDENT = 20
+EXIT_HINT_DURATION = 3.0 
+
 class SpriteSheet:
     def __init__(self, frames, animation_speed, width, height):
         self.frames = frames  # Список уже загруженных и масштабированных кадров
@@ -66,7 +83,7 @@ class SpriteSheet:
         if self.frame_progress >= 1.0:
             self.current_frame = (self.current_frame + 1) % self.frames_count
             self.frame_progress = 0.0
-        
+            
         return self.frames[self.current_frame]
 
     def reset_animation(self):
@@ -237,16 +254,18 @@ class Player:
             self.x += direction * self.move_speed
             self.last_update_time = current_time
             
-        self.facing_right = direction >= 0 if direction != 0 else self.facing_right
-        self.moving = direction != 0
-        
-        # Обновляем состояние анимации
-        new_state = "walk" if self.moving else "idle"
-        if new_state != self.current_state:
+        # Обновляем направление и состояние движения
+        if direction != 0:
+            self.facing_right = direction > 0
+            self.moving = True
+            self.current_state = "walk"
+        else:
+            self.moving = False
+            self.current_state = "idle"
+            
+        # Сбрасываем анимацию при смене состояния
+        if self.current_state != self.last_state:
             self.last_state = self.current_state
-            self.current_state = new_state
-            self.state_changed = True
-            # Сбрасываем анимацию при смене состояния
             self.sprites[self.current_state].reset_animation()
 
     def jump(self):
@@ -273,6 +292,212 @@ class Player:
             if not self.facing_right:
                 sprite = pygame.transform.flip(sprite, True, False)
             screen.blit(sprite, (screen_x, screen_y))
+
+class DialogSystem:
+    def __init__(self):
+        pygame.font.init()
+        self.font = pygame.font.Font(os.path.join("assets", "fonts", "visitor2.otf"), FONT_SIZE)
+        
+        # Загружаем графику диалогов
+        self.dialog_bg = pygame.image.load(os.path.join("assets", "gui", "dialog_box.png"))
+        self.dialog_bg = pygame.transform.scale(self.dialog_bg, (DIALOG_WIDTH, DIALOG_HEIGHT))
+        
+        # Загружаем диалоги
+        with open(os.path.join("assets", "dialogs", "rabbit_dialog.json"), 'r', encoding='utf-8') as f:
+            self.dialogs = json.load(f)
+        
+        self.reset_state()
+
+    def reset_state(self):
+        """Сброс состояния диалоговой системы"""
+        self.current_dialog = None
+        self.current_choices = []
+        self.selected_choice = 0
+        self.is_active = False
+        self.text_alpha = 0
+        self.current_text = ""
+        self.target_text = ""
+        self.text_timer = 0
+        self.my_turn = False
+        self.current_speaker = None
+        self.dialog_ended = False
+        self.dialog_completed = False  # Флаг полного завершения диалога
+        self.exit_hint_timer = 0  # Таймер для подсказки о выходе
+        self.show_exit_hint = False  # Показывать ли подсказку о выходе
+
+    def start_dialog(self, dialog_id, character_name):
+        """Запуск диалога"""
+        if self.dialog_completed:
+            return  # Диалог уже завершен, не запускаем повторно
+            
+        if dialog_id in self.dialogs:
+            print(f"Запуск диалога {dialog_id} для {character_name}")
+            self.current_dialog = self.dialogs[dialog_id]
+            self.current_choices = self.current_dialog.get("choices", [])
+            self.selected_choice = 0
+            self.is_active = True
+            self.text_alpha = 0
+            self.current_text = ""
+            self.target_text = self.current_dialog["text"]
+            self.text_timer = 0
+            self.current_speaker = self.current_dialog.get("speaker")
+            self.my_turn = (self.current_speaker == character_name)
+            self.dialog_ended = False
+            print(f"Диалог запущен. Говорящий: {self.current_speaker}, Мой ход: {self.my_turn}")
+        else:
+            print(f"Ошибка: диалог {dialog_id} не найден")
+
+    def complete_dialog(self):
+        """Полное завершение диалога с показом подсказки"""
+        self.dialog_completed = True
+        self.dialog_ended = True
+        self.is_active = False
+        self.show_exit_hint = True
+        self.exit_hint_timer = EXIT_HINT_DURATION
+        print("Диалог полностью завершен, показываем подсказку о выходе")
+
+    def update(self, dt):
+        if self.is_active:
+            # Анимация появления текста
+            if len(self.current_text) < len(self.target_text):
+                self.text_timer += dt
+                if self.text_timer >= 0.02:
+                    self.text_timer = 0
+                    self.current_text = self.target_text[:len(self.current_text) + 1]
+            
+            # Анимация прозрачности
+            if self.text_alpha < 255:
+                self.text_alpha = min(255, self.text_alpha + 510 * dt)
+        
+        # Обновляем таймер подсказки о выходе
+        if self.show_exit_hint:
+            self.exit_hint_timer -= dt
+            if self.exit_hint_timer <= 0:
+                self.show_exit_hint = False
+
+    def wrap_text(self, text, max_width):
+        """Разбивает текст на строки с учетом максимальной ширины"""
+        words = text.split()
+        lines = []
+        current_line = []
+        
+        for word in words:
+            test_line = ' '.join(current_line + [word])
+            test_surface = self.font.render(test_line, True, TEXT_COLOR)
+            if test_surface.get_width() <= max_width:
+                current_line.append(word)
+            else:
+                if current_line:
+                    lines.append(' '.join(current_line))
+                    current_line = [word]
+                else:
+                    # Если одно слово слишком длинное, разбиваем его
+                    lines.append(word)
+        
+        if current_line:
+            lines.append(' '.join(current_line))
+        
+        return lines
+
+    def draw(self, screen, character_name):
+        """Отрисовка диалогового окна"""
+        # Показываем подсказку о выходе из норы
+        if self.show_exit_hint:
+            hint_text = "Теперь нужно найти выход из кроличьей норы!"
+            hint_surface = self.font.render(hint_text, True, DIALOG_PROMPT_COLOR)
+            hint_x = (SCREEN_WIDTH - hint_surface.get_width()) // 2
+            hint_y = SCREEN_HEIGHT // 2
+            
+            # Добавляем полупрозрачный фон для лучшей читаемости
+            bg_rect = pygame.Rect(hint_x - 10, hint_y - 5, hint_surface.get_width() + 20, hint_surface.get_height() + 10)
+            bg_surface = pygame.Surface((bg_rect.width, bg_rect.height), pygame.SRCALPHA)
+            bg_surface.fill((0, 0, 0, 128))
+            screen.blit(bg_surface, bg_rect)
+            screen.blit(hint_surface, (hint_x, hint_y))
+            return
+
+        if not self.is_active or not self.current_dialog or self.dialog_completed:
+            return
+
+        # Позиционируем диалоговое окно вверху экрана
+        dialog_x = (SCREEN_WIDTH - DIALOG_WIDTH) // 2
+        dialog_y = 20
+
+        # Отрисовываем фон диалога
+        screen.blit(self.dialog_bg, (dialog_x, dialog_y))
+
+        # Отрисовываем имя говорящего
+        speaker_text = "Алиса" if self.current_speaker == "alice" else "Кролик"
+        speaker_surface = self.font.render(speaker_text, True, (255, 255, 100))
+        screen.blit(speaker_surface, (dialog_x + DIALOG_PADDING, dialog_y + DIALOG_PADDING))
+
+        # Вычисляем доступную область для текста
+        text_area_width = DIALOG_WIDTH - 2 * DIALOG_PADDING
+        text_start_y = dialog_y + DIALOG_PADDING + FONT_SIZE + 10
+        
+        # Разбиваем текст на строки
+        lines = self.wrap_text(self.current_text, text_area_width)
+        
+        # Отрисовываем текст диалога
+        text_y = text_start_y
+        max_text_height = DIALOG_HEIGHT - (text_start_y - dialog_y) - DIALOG_PADDING
+        
+        for line in lines:
+            if text_y + FONT_SIZE > dialog_y + DIALOG_HEIGHT - DIALOG_PADDING:
+                break  # Не выходим за границы диалогового окна
+                
+            text_surface = self.font.render(line, True, TEXT_COLOR)
+            text_surface.set_alpha(self.text_alpha)
+            screen.blit(text_surface, (dialog_x + DIALOG_PADDING, text_y))
+            text_y += FONT_SIZE + 3
+
+        # Отрисовываем варианты ответов только если текст полностью появился
+        if (self.current_text == self.target_text and 
+            self.current_speaker == character_name and 
+            self.current_choices):
+            
+            choices_start_y = text_y + 10
+            
+            for i, choice in enumerate(self.current_choices):
+                choice_y = choices_start_y + i * (FONT_SIZE + CHOICE_PADDING)
+                
+                # Проверяем, помещается ли выбор в диалоговое окно
+                if choice_y + FONT_SIZE > dialog_y + DIALOG_HEIGHT - DIALOG_PADDING:
+                    break
+                
+                color = CHOICE_HOVER_COLOR if i == self.selected_choice else CHOICE_COLOR
+                indent = CHOICE_INDENT * 2 if i == self.selected_choice else CHOICE_INDENT
+                
+                # Обрезаем текст выбора если он слишком длинный
+                choice_text = choice['text']
+                max_choice_width = text_area_width - indent
+                choice_lines = self.wrap_text(choice_text, max_choice_width)
+                
+                if choice_lines:
+                    choice_surface = self.font.render(choice_lines[0], True, color)
+                    screen.blit(choice_surface, (dialog_x + DIALOG_PADDING + indent, choice_y))
+
+    def handle_input(self, event, character_name):
+        """Обработка ввода для диалоговой системы"""
+        if not self.is_active or not self.my_turn or not self.current_choices or self.dialog_completed:
+            return None
+
+        if event.type == pygame.KEYDOWN:
+            # Если текст ещё не полностью появился, показываем его сразу
+            if self.current_text != self.target_text:
+                self.current_text = self.target_text
+                return None
+
+            if event.key == pygame.K_UP:
+                self.selected_choice = (self.selected_choice - 1) % len(self.current_choices)
+                return None
+            elif event.key == pygame.K_DOWN:
+                self.selected_choice = (self.selected_choice + 1) % len(self.current_choices)
+                return None
+            elif event.key == pygame.K_RETURN:
+                if self.selected_choice < len(self.current_choices):
+                    return self.selected_choice
+        return None
 
 class Game:
     def __init__(self, host, is_host):
@@ -308,6 +533,18 @@ class Game:
         self.receive_thread = threading.Thread(target=self.receive_data)
         self.receive_thread.daemon = True
         self.receive_thread.start()
+
+        # Добавляем систему диалогов
+        self.dialog_system = DialogSystem()
+        self.is_host = is_host
+        
+        # Упрощенное состояние диалога для синхронизации
+        self.dialog_state = {
+            "is_active": False,
+            "current_dialog_id": None,
+            "current_speaker": None,
+            "dialog_completed": False
+        }
 
     def create_shadow(self):
         """Создает градиент затемнения сверху"""
@@ -355,51 +592,188 @@ class Game:
         
         return background
 
+    def send_data(self):
+        """Отправка данных другому игроку"""
+        data = pickle.dumps({
+            "player": {
+                "x": self.my_player.x,
+                "y": self.my_player.y,
+                "facing_right": self.my_player.facing_right,
+                "moving": self.my_player.moving
+            },
+            "dialog": self.dialog_state
+        })
+        self.socket.sendto(data, self.other_address)
+
     def receive_data(self):
+        """Получение данных от другого игрока"""
         while True:
             try:
                 data, addr = self.socket.recvfrom(1024)
-                other_data = pickle.loads(data)
-                self.other_player.x = other_data[0]
-                self.other_player.y = other_data[1]
-                self.other_player.facing_right = other_data[2]
-                self.other_player.moving = other_data[3]
+                received_data = pickle.loads(data)
+                
+                # Обновляем позицию другого игрока
+                player_data = received_data["player"]
+                self.other_player.x = player_data["x"]
+                self.other_player.y = player_data["y"]
+                self.other_player.facing_right = player_data["facing_right"]
+                self.other_player.moving = player_data["moving"]
+                
+                # Синхронизируем состояние диалога
+                other_dialog_state = received_data["dialog"]
+                
+                # Проверяем, нужно ли обновить диалог
+                if (other_dialog_state["is_active"] != self.dialog_state["is_active"] or
+                    other_dialog_state["current_dialog_id"] != self.dialog_state["current_dialog_id"] or
+                    other_dialog_state["current_speaker"] != self.dialog_state["current_speaker"]):
+                    
+                    print("Получено обновление состояния диалога:")
+                    print(f"Активен: {other_dialog_state['is_active']}")
+                    print(f"Текущий диалог: {other_dialog_state['current_dialog_id']}")
+                    print(f"Говорящий: {other_dialog_state['current_speaker']}")
+                    
+                    self.handle_other_player_choice(other_dialog_state)
             except:
                 pass
 
-    def send_data(self):
-        data = pickle.dumps((
-            self.my_player.x,
-            self.my_player.y,
-            self.my_player.facing_right,
-            self.my_player.moving
-        ))
-        self.socket.sendto(data, self.other_address)
+    def handle_other_player_choice(self, other_dialog_state):
+        """Обработка выбора другого игрока"""
+        # Проверяем завершение диалога
+        if other_dialog_state.get("dialog_completed") or not other_dialog_state["is_active"]:
+            print("Получено завершение диалога от другого игрока")
+            self.dialog_system.complete_dialog()
+            self.dialog_state.update(other_dialog_state)
+            return
+
+        # Обновляем состояние диалога
+        if other_dialog_state["current_dialog_id"] != self.dialog_state["current_dialog_id"]:
+            print(f"Переход к диалогу: {other_dialog_state['current_dialog_id']}")
+            self.dialog_state.update(other_dialog_state)
+            
+            if other_dialog_state["current_dialog_id"]:
+                self.dialog_system.reset_state()
+                self.dialog_system.start_dialog(
+                    other_dialog_state["current_dialog_id"], 
+                    self.my_player.character_name
+                )
+
+    def start_dialog(self, dialog_id):
+        """Начало диалога"""
+        if not self.dialog_system.dialog_completed:
+            self.dialog_system.start_dialog(dialog_id, self.my_player.character_name)
+            self.dialog_state["is_active"] = True
+            self.dialog_state["current_dialog_id"] = dialog_id
+            self.dialog_state["current_speaker"] = "alice"
+            self.send_data()
+
+    def end_dialog(self):
+        """Завершение диалога"""
+        self.dialog_system.complete_dialog()
+        self.dialog_state["is_active"] = False
+        self.dialog_state["current_dialog_id"] = None
+        self.dialog_state["current_speaker"] = None
+        self.dialog_state["dialog_completed"] = True
+        self.send_data()
+
+    def make_choice(self, choice_index):
+        """Обработка выбора варианта ответа"""
+        if not self.dialog_system.my_turn or not self.dialog_system.current_dialog:
+            return
+            
+        if choice_index >= len(self.dialog_system.current_dialog.get("choices", [])):
+            return
+            
+        choice = self.dialog_system.current_dialog["choices"][choice_index]
+        next_dialog = choice.get("next")
+        
+        # Если это конец диалога
+        if next_dialog == "end":
+            self.end_dialog()
+            return
+
+        # Переход к следующему диалогу
+        if next_dialog and next_dialog in self.dialog_system.dialogs:
+            next_dialog_data = self.dialog_system.dialogs[next_dialog]
+            next_speaker = next_dialog_data.get("speaker")
+            
+            self.dialog_state["current_dialog_id"] = next_dialog
+            self.dialog_state["current_speaker"] = next_speaker
+            self.dialog_state["is_active"] = True
+            self.send_data()
+            
+            # Запускаем новый диалог
+            self.dialog_system.reset_state()
+            self.dialog_system.start_dialog(next_dialog, self.my_player.character_name)
+        else:
+            # Если следующего диалога нет, завершаем
+            self.end_dialog()
+
+    def check_dialog_trigger(self):
+        """Проверка возможности начать диалог"""
+        # Вычисляем расстояние между персонажами
+        distance = ((self.my_player.x - self.other_player.x) ** 2 + 
+                   (self.my_player.y - self.other_player.y) ** 2) ** 0.5
+        
+        # Если игроки достаточно близко и диалог не активен и не завершен
+        if (distance < DIALOG_TRIGGER_DISTANCE and 
+            not self.dialog_system.is_active and 
+            not self.dialog_system.dialog_completed and
+            self.my_player.character_name == "alice"):
+            
+            self.start_dialog("start")
+
+    def handle_input(self, event):
+        """Обработка ввода для диалогов"""
+        if not self.dialog_system.is_active:
+            return
+
+        choice = self.dialog_system.handle_input(event, self.my_player.character_name)
+        if choice is not None:
+            print(f"Выбран вариант {choice + 1}")
+            self.make_choice(choice)
 
     def run(self):
         running = True
+        last_time = time.time()
         while running:
+            current_time = time.time()
+            dt = current_time - last_time
+            last_time = current_time
+
+            # Получаем состояние клавиш
+            keys = pygame.key.get_pressed()
+
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
                     running = False
                 elif event.type == pygame.KEYDOWN:
-                    if event.key == pygame.K_SPACE:
+                    if event.key == pygame.K_SPACE and not self.dialog_system.is_active:
                         self.my_player.jump()
+                    else:
+                        self.handle_input(event)
 
-            # Обработка нажатий клавиш
-            keys = pygame.key.get_pressed()
-            if keys[pygame.K_LEFT]:
-                self.my_player.move(-1)
-            elif keys[pygame.K_RIGHT]:
-                self.my_player.move(1)
+            # Проверяем, есть ли активный диалог, блокирующий движение
+            allow_movement = True
+            if self.dialog_system.is_active:
+                allow_movement = False
+
+            # Обрабатываем нажатия клавиш
+            if allow_movement and not self.dialog_system.dialog_completed:
+                if keys[pygame.K_LEFT]:
+                    self.my_player.move(-1)
+                elif keys[pygame.K_RIGHT]:
+                    self.my_player.move(1)
+                else:
+                    self.my_player.move(0)
             else:
                 self.my_player.move(0)
 
-            # Обновление физики
+            # Обновление физики и проверка диалога
             self.my_player.update()
             self.other_player.update()
+            self.check_dialog_trigger()
 
-            # Обновление камеры с предсказанием движения
+            # Обновление камеры
             next_x = self.my_player.x
             next_y = self.my_player.y
             if keys[pygame.K_LEFT]:
@@ -408,6 +782,9 @@ class Game:
                 next_x += self.my_player.move_speed * 5
             self.camera.update(next_x, next_y)
 
+            # Обновляем анимацию диалогов
+            self.dialog_system.update(dt)
+
             # Отправка данных
             self.send_data()
 
@@ -415,9 +792,17 @@ class Game:
             self.screen.blit(self.background, (0, 0))
             platform_y = SCREEN_HEIGHT - PLATFORM_HEIGHT
             self.screen.blit(self.platform, (0, platform_y))
-            self.my_player.draw(self.screen, self.camera)
-            self.other_player.draw(self.screen, self.camera)
-            self.screen.blit(self.shadow, (0, 0))  # Добавляем затемнение поверх всего
+            
+            # Находим Алису и Кролика
+            alice = self.my_player if self.my_player.character_name == "alice" else self.other_player
+            rabbit = self.other_player if self.my_player.character_name == "alice" else self.my_player
+            
+            # Сначала отрисовываем Кролика, потом Алису
+            rabbit.draw(self.screen, self.camera)
+            alice.draw(self.screen, self.camera)
+            
+            self.screen.blit(self.shadow, (0, 0))
+            self.dialog_system.draw(self.screen, self.my_player.character_name)
             
             pygame.display.flip()
             self.clock.tick(60)

@@ -1,0 +1,72 @@
+{
+    "start": {
+        "speaker": "alice",
+        "text": "Извините...",
+        "choices": [
+            {
+                "text": "Куда вы так спешите?",
+                "next": "rabbit_response1"
+            },
+            {
+                "text": "Постойте, пожалуйста!",
+                "next": "rabbit_response2"
+            }
+        ]
+    },
+    "rabbit_response1": {
+        "speaker": "rabbit",
+        "text": "О нет, о нет! Я опаздываю!",
+        "choices": [
+            {
+                "text": "Нет времени объяснять!",
+                "next": "alice_choice2"
+            },
+            {
+                "text": "На важную встречу!",
+                "next": "alice_choice2"
+            }
+        ]
+    },
+    "rabbit_response2": {
+        "speaker": "rabbit",
+        "text": "Некогда стоять! Я ужасно опаздываю!",
+        "choices": [
+            {
+                "text": "Следуй за мной, если хочешь узнать!",
+                "next": "alice_choice2"
+            },
+            {
+                "text": "Спешу на чаепитие к Королеве!",
+                "next": "alice_choice2"
+            }
+        ]
+    },
+    "alice_choice2": {
+        "speaker": "alice",
+        "text": "Но...",
+        "choices": [
+            {
+                "text": "Я могу пойти с вами?",
+                "next": "rabbit_final"
+            },
+            {
+                "text": "Звучит интересно!",
+                "next": "rabbit_final"
+            }
+        ]
+    },
+    "rabbit_final": {
+        "speaker": "rabbit",
+        "text": "Тогда поспеши! *достает карманные часы* О боже, как же мы опаздываем!",
+        "choices": [
+            {
+                "text": "Следуй за мной!",
+                "next": "end"
+            },
+            {
+                "text": "Быстрее, быстрее!",
+                "next": "end"
+            }
+        ]
+    }
+} 

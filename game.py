@@ -1090,10 +1090,30 @@ class Game:
         self.clock = pygame.time.Clock()
         self.camera = Camera(SCREEN_WIDTH, SCREEN_HEIGHT)
         
-        
+        # Создаем фон и платформу
         self.background = self.create_background()
         self.platform = self.create_platform()
         self.shadow = self.create_shadow()
+        
+        # Загружаем финальные картинки
+        try:
+            self.final_image = pygame.image.load(os.path.join("assets", "tiles", "Final level.png")).convert_alpha()
+            self.final_image = pygame.transform.scale(self.final_image, (SCREEN_WIDTH, SCREEN_HEIGHT))
+            print("Final level.png успешно загружен")
+            
+            smile_path = os.path.join("assets", "tiles", "Smile.png")
+            if not os.path.exists(smile_path):
+                print(f"Ошибка: файл {smile_path} не найден")
+                self.smile_image = None
+            else:
+                self.smile_image = pygame.image.load(smile_path).convert_alpha()
+                self.smile_image = pygame.transform.scale(self.smile_image, (SCREEN_WIDTH, SCREEN_HEIGHT))
+                print("Smile.png успешно загружен")
+        except Exception as e:
+            print(f"Ошибка при загрузке картинок: {e}")
+            print(f"Проверьте наличие файлов в папке assets/tiles/")
+            self.final_image = None
+            self.smile_image = None
 
         # Создание игроков с соответствующими спрайтами
         platform_y = WORLD_HEIGHT - PLATFORM_HEIGHT
@@ -1389,29 +1409,43 @@ class Game:
         if not self.victory_achieved:
             return
             
-        # Белый фон
+        # Белый фон с плавным появлением
         white_surface = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT))
         white_surface.fill((255, 255, 255))
-        
-        # Плавное появление
-        alpha = min(255, int(self.victory_timer * 255 / 2))  # Появляется за 2 секунды
-        white_surface.set_alpha(alpha)
+        white_alpha = min(255, int(self.victory_timer * 255))  # Плавное появление белого
+        white_surface.set_alpha(white_alpha)
         screen.blit(white_surface, (0, 0))
         
-        # Текст победы
+        # Текст победы (черный, с анимацией печатания)
         if self.victory_timer > 1:  # Текст появляется через секунду
             try:
                 font = pygame.font.Font(os.path.join("assets", "fonts", "visitor2.otf"), 48)
             except:
                 font = pygame.font.Font(None, 48)
             
-            text = font.render("Добро пожаловать в страну чудес!", True, (0, 0, 0))
-            text_rect = text.get_rect(center=(SCREEN_WIDTH//2, SCREEN_HEIGHT//2))
+            full_text = "Добро пожаловать в страну чудес!"
+            # Анимация печатания текста
+            text_progress = min(1.0, (self.victory_timer - 1) * 0.5)  # Полное появление за 2 секунды
+            visible_chars = int(len(full_text) * text_progress)
+            current_text = full_text[:visible_chars]
             
-            # Анимация текста
-            text_alpha = min(255, int((self.victory_timer - 1) * 255 / 2))
-            text.set_alpha(text_alpha)
-            screen.blit(text, text_rect)
+            if current_text:  # Проверяем, что текст не пустой
+                text = font.render(current_text, True, (0, 0, 0))  # Черный текст
+                text_rect = text.get_rect(center=(SCREEN_WIDTH//2, SCREEN_HEIGHT//2))
+                screen.blit(text, text_rect)
+        
+        # Улыбка появляется после завершения анимации текста
+        if self.victory_timer > 4 and self.smile_image:  # Улыбка появляется через 4 секунды
+            smile_alpha = min(255, int((self.victory_timer - 4) * 255))  # Плавное появление
+            
+            # Картинка на весь экран
+            scaled_image = pygame.transform.scale(self.smile_image, (SCREEN_WIDTH, SCREEN_HEIGHT))
+            
+            # Создаем временную поверхность для правильного наложения прозрачности
+            temp_surface = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
+            temp_surface.blit(scaled_image, (0, 0))
+            temp_surface.set_alpha(smile_alpha)
+            screen.blit(temp_surface, (0, 0))
 
     def check_platform_activation(self):
         """Проверяет активацию подвижных платформ"""

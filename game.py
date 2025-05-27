@@ -15,7 +15,7 @@ pygame.init()
 # Константы
 SCREEN_WIDTH = 800
 SCREEN_HEIGHT = 600
-WORLD_WIDTH = 3000
+WORLD_WIDTH = 3000  
 WORLD_HEIGHT = 1000
 
 # Размеры персонажей
@@ -23,20 +23,20 @@ ALICE_WIDTH = 192
 ALICE_HEIGHT = 192
 RABBIT_WIDTH = 80
 RABBIT_HEIGHT = 80
-ALICE_OFFSET = 70  # Смещение для Алисы, чтобы компенсировать размер спрайта
-RABBIT_OFFSET = 10  # Небольшое смещение для кролика
+ALICE_OFFSET = 70  
+RABBIT_OFFSET = 10  
 
 # Физика
 GRAVITY = 0.5
-ALICE_JUMP_FORCE = -8
-RABBIT_JUMP_FORCE = -15
-ALICE_MOVE_SPEED = 5
-RABBIT_MOVE_SPEED = 8
+ALICE_JUMP_FORCE = -16
+RABBIT_JUMP_FORCE = -20
+ALICE_MOVE_SPEED = 8
+RABBIT_MOVE_SPEED = 10
 
 # Скорости анимации
 ALICE_ANIMATION_SPEED = 0.04
 RABBIT_IDLE_ANIMATION_SPEED = 0.15
-RABBIT_WALK_ANIMATION_SPEED = 0.06
+RABBIT_WALK_ANIMATION_SPEED = 0.04
 
 DIRT_BROWN = (65, 50, 35)  
 DIRT_DARK = (55, 40, 25)   
@@ -46,7 +46,7 @@ SHADOW_HEIGHT = 400
 SHADOW_ALPHA = 200  
 
 # Константы для диалогов
-DIALOG_PADDING = 20
+DIALOG_PADDING = 40
 DIALOG_WIDTH = 700
 DIALOG_HEIGHT = 200
 CHOICE_HEIGHT = 40
@@ -58,11 +58,19 @@ CHOICE_HOVER_COLOR = (255, 255, 100)
 DIALOG_TRIGGER_DISTANCE = 150
 DIALOG_PROMPT_COLOR = (255, 255, 100)
 CHOICE_INDENT = 20
-EXIT_HINT_DURATION = 3.0 
+EXIT_HINT_DURATION = 3.0  
+
+# Константы для платформ и препятствий
+PLATFORM_COLOR = (139, 69, 19)  
+ALICE_PLATFORM_COLOR = (100, 149, 237)  
+RABBIT_PLATFORM_COLOR = (255, 165, 0)  
+SWITCH_COLOR = (255, 215, 0)  
+DOOR_COLOR = (160, 82, 45)  
+COLLECTIBLE_COLOR = (255, 20, 147) 
 
 class SpriteSheet:
     def __init__(self, frames, animation_speed, width, height):
-        self.frames = frames  # Список уже загруженных и масштабированных кадров
+        self.frames = frames  
         self.frames_count = len(frames)
         self.target_width = width
         self.target_height = height
@@ -251,7 +259,14 @@ class Player:
     def move(self, direction):
         current_time = time.time()
         if current_time - self.last_update_time > 1/60:
-            self.x += direction * self.move_speed
+            old_x = self.x
+            new_x = self.x + direction * self.move_speed
+            
+            # Проверяем горизонтальные коллизии (если есть платформы)
+            if hasattr(self, '_platforms'):
+                new_x = self.check_horizontal_collisions(self._platforms, new_x)
+            
+            self.x = new_x
             self.last_update_time = current_time
             
         # Обновляем направление и состояние движения
@@ -273,17 +288,91 @@ class Player:
             self.vel_y = self.jump_force
             self.is_jumping = True
 
-    def update(self):
+    def update(self, platforms=None):
         self.vel_y += GRAVITY
+        old_y = self.y
+        old_x = self.x
+        
+        # Сначала обновляем позицию по Y
         self.y += self.vel_y
 
-        # Обработка приземления на платформу
+        # Проверяем коллизии с платформами по вертикали
+        player_rect = pygame.Rect(self.x, self.y, self.width - self.offset, self.height - self.offset)
+        
+        # Сначала проверяем основную платформу
         platform_y = WORLD_HEIGHT - PLATFORM_HEIGHT
         if self.y > platform_y - self.height + self.offset:
             self.y = platform_y - self.height + self.offset
-            if self.vel_y > 0:  # Если падали вниз
+            if self.vel_y > 0:
                 self.vel_y = 0
                 self.is_jumping = False
+
+        # Проверяем коллизии с дополнительными платформами
+        if platforms:
+            for platform in platforms:
+                platform_rect = platform.rect
+                player_rect = pygame.Rect(self.x, self.y, self.width - self.offset, self.height - self.offset)
+                
+                # Проверяем вертикальные коллизии
+                if player_rect.colliderect(platform_rect):
+                    # Приземление сверху (игрок падает на платформу)
+                    if (old_y + self.height - self.offset <= platform.y + 5 and 
+                        self.vel_y > 0 and 
+                        self.y + self.height - self.offset > platform.y):
+                        self.y = platform.y - self.height + self.offset
+                        self.vel_y = 0
+                        self.is_jumping = False
+                        break
+                    # Удар головой снизу (игрок прыгает в платформу снизу)
+                    elif (old_y >= platform.y + platform.height - 5 and 
+                          self.vel_y < 0 and 
+                          self.y < platform.y + platform.height):
+                        self.y = platform.y + platform.height
+                        self.vel_y = 0
+                        break
+
+    def check_horizontal_collisions(self, platforms, new_x):
+        """Проверяет горизонтальные коллизии при движении"""
+        if not platforms:
+            return new_x
+            
+        player_rect = pygame.Rect(new_x, self.y, self.width - self.offset, self.height - self.offset)
+        
+        for platform in platforms:
+            if player_rect.colliderect(platform.rect):
+                # Столкновение слева
+                if self.x < platform.x:
+                    return platform.x - (self.width - self.offset)
+                # Столкновение справа
+                else:
+                    return platform.x + platform.width
+        
+        return new_x
+
+    def check_collectibles(self, collectibles):
+        """Проверяет сбор предметов"""
+        player_rect = pygame.Rect(self.x, self.y, self.width - self.offset, self.height - self.offset)
+        collected_items = []
+        
+        for collectible in collectibles:
+            if not collectible.collected and player_rect.colliderect(collectible.rect):
+                if collectible.collect(self.character_name):
+                    collected_items.append(collectible)
+        
+        return collected_items
+
+    def check_platform_triggers(self, platforms):
+        """Проверяет активацию платформ-триггеров"""
+        player_rect = pygame.Rect(self.x, self.y, self.width - self.offset, self.height - self.offset)
+        triggered_platforms = []
+        
+        for platform in platforms:
+            if (platform.platform_type == "alice_trigger" and 
+                self.character_name == "alice" and
+                player_rect.colliderect(platform.rect)):
+                triggered_platforms.append(platform)
+        
+        return triggered_platforms
 
     def draw(self, screen, camera):
         screen_x, screen_y = camera.apply(self.x, self.y)
@@ -301,6 +390,19 @@ class DialogSystem:
         # Загружаем графику диалогов
         self.dialog_bg = pygame.image.load(os.path.join("assets", "gui", "dialog_box.png"))
         self.dialog_bg = pygame.transform.scale(self.dialog_bg, (DIALOG_WIDTH, DIALOG_HEIGHT))
+        
+        # Загружаем портреты персонажей
+        try:
+            self.alice_portrait = pygame.image.load(os.path.join("assets", "characters", "alice", "alice_dialog.png")).convert_alpha()
+            self.alice_portrait = pygame.transform.scale(self.alice_portrait, (80, 80))
+        except:
+            self.alice_portrait = None
+            
+        try:
+            self.rabbit_portrait = pygame.image.load(os.path.join("assets", "characters", "rabbit", "rabbit_dialog.png")).convert_alpha()
+            self.rabbit_portrait = pygame.transform.scale(self.rabbit_portrait, (80, 80))
+        except:
+            self.rabbit_portrait = None
         
         # Загружаем диалоги
         with open(os.path.join("assets", "dialogs", "rabbit_dialog.json"), 'r', encoding='utf-8') as f:
@@ -426,14 +528,28 @@ class DialogSystem:
         # Отрисовываем фон диалога
         screen.blit(self.dialog_bg, (dialog_x, dialog_y))
 
-        # Отрисовываем имя говорящего
-        speaker_text = "Алиса" if self.current_speaker == "alice" else "Кролик"
-        speaker_surface = self.font.render(speaker_text, True, (255, 255, 100))
-        screen.blit(speaker_surface, (dialog_x + DIALOG_PADDING, dialog_y + DIALOG_PADDING))
+        # Отрисовываем портрет говорящего персонажа
+        portrait = None
+        if self.current_speaker == "alice" and self.alice_portrait:
+            portrait = self.alice_portrait
+        elif self.current_speaker == "rabbit" and self.rabbit_portrait:
+            portrait = self.rabbit_portrait
+        
+        if portrait:
+            portrait_x = dialog_x + DIALOG_PADDING
+            portrait_y = dialog_y + DIALOG_PADDING
+            screen.blit(portrait, (portrait_x, portrait_y))
+            text_start_x = portrait_x + 90  # Смещаем текст вправо от портрета
+        else:
+            # Fallback - отображаем имя как раньше
+            speaker_text = "Алиса" if self.current_speaker == "alice" else "Кролик"
+            speaker_surface = self.font.render(speaker_text, True, (255, 255, 100))
+            screen.blit(speaker_surface, (dialog_x + DIALOG_PADDING, dialog_y + DIALOG_PADDING))
+            text_start_x = dialog_x + DIALOG_PADDING
 
         # Вычисляем доступную область для текста
-        text_area_width = DIALOG_WIDTH - 2 * DIALOG_PADDING
-        text_start_y = dialog_y + DIALOG_PADDING + FONT_SIZE + 10
+        text_area_width = DIALOG_WIDTH - (text_start_x - dialog_x) - DIALOG_PADDING
+        text_start_y = dialog_y + DIALOG_PADDING + 10
         
         # Разбиваем текст на строки
         lines = self.wrap_text(self.current_text, text_area_width)
@@ -448,7 +564,7 @@ class DialogSystem:
                 
             text_surface = self.font.render(line, True, TEXT_COLOR)
             text_surface.set_alpha(self.text_alpha)
-            screen.blit(text_surface, (dialog_x + DIALOG_PADDING, text_y))
+            screen.blit(text_surface, (text_start_x, text_y))
             text_y += FONT_SIZE + 3
 
         # Отрисовываем варианты ответов только если текст полностью появился
@@ -475,7 +591,7 @@ class DialogSystem:
                 
                 if choice_lines:
                     choice_surface = self.font.render(choice_lines[0], True, color)
-                    screen.blit(choice_surface, (dialog_x + DIALOG_PADDING + indent, choice_y))
+                    screen.blit(choice_surface, (text_start_x + indent, choice_y))
 
     def handle_input(self, event, character_name):
         """Обработка ввода для диалоговой системы"""
@@ -498,6 +614,429 @@ class DialogSystem:
                 if self.selected_choice < len(self.current_choices):
                     return self.selected_choice
         return None
+
+class Platform:
+    def __init__(self, x, y, width, height, platform_type="normal", character_access=None):
+        self.x = x
+        self.y = y
+        self.width = width
+        self.height = height
+        self.platform_type = platform_type  # "normal", "alice_only", "rabbit_only", "switch", "door"
+        self.character_access = character_access  # None, "alice", "rabbit"
+        self.is_active = True  # Для дверей и переключателей
+        self.rect = pygame.Rect(x, y, width, height)
+        
+        # Загружаем текстуры
+        self.load_textures()
+
+    def load_textures(self):
+        """Загружает текстуры для платформ"""
+        try:
+            # Загружаем новую текстуру блоков
+            self.block_texture = pygame.image.load(os.path.join("assets", "tiles", "mainlev_build.png")).convert_alpha()
+            self.terrain_texture = pygame.image.load(os.path.join("assets", "tiles", "terrain.png")).convert_alpha()
+            
+            # Создаем поверхность для платформы с текстурой
+            self.surface = self.create_textured_platform()
+        except:
+            # Если не удалось загрузить текстуры, используем цветные прямоугольники
+            self.block_texture = None
+            self.terrain_texture = None
+            self.surface = None
+
+    def create_textured_platform(self):
+        """Создает текстурированную поверхность платформы"""
+        if not self.block_texture:
+            return None
+            
+        surface = pygame.Surface((self.width, self.height + 20), pygame.SRCALPHA)  # Добавляем высоту для основания
+        
+        # Определяем размер блока (предполагаем 16x16 пикселей на блок в спрайтшите)
+        block_size = 16
+        tile_size = 32  # Размер тайла в игре
+        
+        # Заполняем платформу блоками
+        for x in range(0, self.width, tile_size):
+            for y in range(0, self.height + 20, tile_size):
+                # Выбираем подходящий блок из спрайтшита
+                if y < self.height:
+                    # Верхний слой - используем верхние блоки
+                    block_rect = pygame.Rect(0, 0, block_size, block_size)
+                else:
+                    # Нижний слой - используем нижние блоки
+                    block_rect = pygame.Rect(0, block_size, block_size, block_size)
+                
+                block_sprite = self.block_texture.subsurface(block_rect)
+                scaled_block = pygame.transform.scale(block_sprite, (tile_size, tile_size))
+                surface.blit(scaled_block, (x, y))
+        
+        # Добавляем цветовой оверлей для специальных платформ
+        if self.platform_type == "alice_only":
+            overlay = pygame.Surface((self.width, self.height), pygame.SRCALPHA)
+            overlay.fill((*ALICE_PLATFORM_COLOR, 80))
+            surface.blit(overlay, (0, 0))
+        elif self.platform_type == "rabbit_only":
+            overlay = pygame.Surface((self.width, self.height), pygame.SRCALPHA)
+            overlay.fill((*RABBIT_PLATFORM_COLOR, 80))
+            surface.blit(overlay, (0, 0))
+        elif self.platform_type == "switch":
+            overlay = pygame.Surface((self.width, self.height), pygame.SRCALPHA)
+            overlay.fill((*SWITCH_COLOR, 120))
+            surface.blit(overlay, (0, 0))
+        
+        return surface
+
+    def can_stand_on(self, character_name):
+        """Проверяет, может ли персонаж стоять на платформе"""
+        if not self.is_active and self.platform_type == "door":
+            return False
+        if self.character_access is None:
+            return True
+        return self.character_access == character_name
+
+    def get_color(self):
+        """Возвращает цвет платформы в зависимости от типа (для fallback)"""
+        if self.platform_type == "alice_only":
+            return ALICE_PLATFORM_COLOR
+        elif self.platform_type == "rabbit_only":
+            return RABBIT_PLATFORM_COLOR
+        elif self.platform_type == "switch":
+            return SWITCH_COLOR
+        elif self.platform_type == "door":
+            return DOOR_COLOR if self.is_active else (80, 40, 20)
+        elif self.platform_type == "moving":
+            return (255, 100, 255)  # Фиолетовый для подвижных платформ
+        else:
+            return PLATFORM_COLOR
+
+    def draw(self, screen, camera):
+        """Отрисовка платформы"""
+        screen_x, screen_y = camera.apply(self.x, self.y)
+        if -self.width <= screen_x <= SCREEN_WIDTH and -self.height <= screen_y <= SCREEN_HEIGHT:
+            
+            # Если есть текстурированная поверхность, используем её
+            if self.surface:
+                # Отрисовываем с основанием (смещение вниз)
+                screen.blit(self.surface, (screen_x, screen_y - 20))
+            else:
+                # Fallback к цветным прямоугольникам
+                color = self.get_color()
+                pygame.draw.rect(screen, color, (screen_x, screen_y, self.width, self.height))
+                
+                # Добавляем границу для лучшей видимости
+                pygame.draw.rect(screen, (0, 0, 0), (screen_x, screen_y, self.width, self.height), 2)
+            
+            # Добавляем текст для специальных платформ
+            if self.platform_type == "alice_only":
+                try:
+                    font = pygame.font.Font(os.path.join("assets", "fonts", "visitor2.otf"), 18)
+                except:
+                    font = pygame.font.Font(None, 20)
+                text = font.render("A", True, (255, 255, 255))
+                text_rect = text.get_rect(center=(screen_x + self.width//2, screen_y + self.height//2))
+                
+                # Добавляем фон для текста
+                bg_rect = text_rect.inflate(6, 6)
+                pygame.draw.rect(screen, (0, 0, 0, 128), bg_rect)
+                screen.blit(text, text_rect)
+            elif self.platform_type == "rabbit_only":
+                try:
+                    font = pygame.font.Font(os.path.join("assets", "fonts", "visitor2.otf"), 18)
+                except:
+                    font = pygame.font.Font(None, 20)
+                text = font.render("R", True, (255, 255, 255))
+                text_rect = text.get_rect(center=(screen_x + self.width//2, screen_y + self.height//2))
+                
+                # Добавляем фон для текста
+                bg_rect = text_rect.inflate(6, 6)
+                pygame.draw.rect(screen, (0, 0, 0, 128), bg_rect)
+                screen.blit(text, text_rect)
+            elif self.platform_type == "switch":
+                try:
+                    font = pygame.font.Font(os.path.join("assets", "fonts", "visitor2.otf"), 14)
+                except:
+                    font = pygame.font.Font(None, 16)
+                text = font.render("SW", True, (0, 0, 0))
+                text_rect = text.get_rect(center=(screen_x + self.width//2, screen_y + self.height//2))
+                screen.blit(text, text_rect)
+            elif self.platform_type == "moving":
+                # Убираем подсказки с подвижных платформ
+                pass
+
+class Collectible:
+    def __init__(self, x, y, collectible_type="key"):
+        self.x = x
+        self.y = y
+        self.collectible_type = collectible_type
+        self.collected = False
+        self.rect = pygame.Rect(x, y, 20, 20)
+
+    def collect(self, character_name):
+        """Собирает предмет"""
+        if not self.collected:
+            self.collected = True
+            return True
+        return False
+
+    def draw(self, screen, camera):
+        """Отрисовка предмета"""
+        if self.collected:
+            return
+            
+        screen_x, screen_y = camera.apply(self.x, self.y)
+        if -20 <= screen_x <= SCREEN_WIDTH and -20 <= screen_y <= SCREEN_HEIGHT:
+            pygame.draw.circle(screen, COLLECTIBLE_COLOR, (screen_x + 10, screen_y + 10), 10)
+            pygame.draw.circle(screen, (255, 255, 255), (screen_x + 10, screen_y + 10), 10, 2)
+            
+            # Добавляем символ ключа
+            try:
+                font = pygame.font.Font(os.path.join("assets", "fonts", "visitor2.otf"), 14)
+            except:
+                font = pygame.font.Font(None, 16)
+            text = font.render("K", True, (255, 255, 255))
+            screen.blit(text, (screen_x + 6, screen_y + 4))
+
+class AnimatedKey:
+    def __init__(self, x, y, key_type="key2"):
+        self.x = x
+        self.y = y
+        self.key_type = key_type
+        self.collected = False
+        self.rect = pygame.Rect(x, y, 32, 32)
+        self.animation_frames = []
+        self.current_frame = 0
+        self.animation_timer = 0
+        self.animation_speed = 0.1
+        self.load_animation()
+
+    def load_animation(self):
+        """Загружает анимацию ключа"""
+        try:
+            if self.key_type == "key2":
+                # Загружаем Key 2 - GOLD
+                for i in range(12):  # 12 кадров
+                    frame_path = os.path.join("assets", "items", f"Key 2 - GOLD - {i:04d}.png")
+                    frame = pygame.image.load(frame_path).convert_alpha()
+                    # Сохраняем пропорции при масштабировании
+                    original_size = frame.get_size()
+                    aspect_ratio = original_size[0] / original_size[1]
+                    new_height = 32
+                    new_width = int(new_height * aspect_ratio)
+                    frame = pygame.transform.scale(frame, (new_width, new_height))
+                    self.animation_frames.append(frame)
+            elif self.key_type == "key5":
+                # Загружаем Key 5 - GOLD
+                for i in range(18):  # 18 кадров
+                    frame_path = os.path.join("assets", "items", f"Key 5 - GOLD - frame{i:04d}.png")
+                    frame = pygame.image.load(frame_path).convert_alpha()
+                    # Сохраняем пропорции при масштабировании
+                    original_size = frame.get_size()
+                    aspect_ratio = original_size[0] / original_size[1]
+                    new_height = 32
+                    new_width = int(new_height * aspect_ratio)
+                    frame = pygame.transform.scale(frame, (new_width, new_height))
+                    self.animation_frames.append(frame)
+            elif self.key_type == "key15":
+                # Загружаем Key 15 - GOLD
+                for i in range(48):  # 48 кадров
+                    frame_path = os.path.join("assets", "items", f"Key 15 - GOLD - frame{i:04d}.png")
+                    frame = pygame.image.load(frame_path).convert_alpha()
+                    # Сохраняем пропорции при масштабировании
+                    original_size = frame.get_size()
+                    aspect_ratio = original_size[0] / original_size[1]
+                    new_height = 32
+                    new_width = int(new_height * aspect_ratio)
+                    frame = pygame.transform.scale(frame, (new_width, new_height))
+                    self.animation_frames.append(frame)
+        except:
+            # Fallback - создаем простой ключ
+            fallback = pygame.Surface((32, 32), pygame.SRCALPHA)
+            pygame.draw.circle(fallback, (255, 215, 0), (16, 16), 12)
+            pygame.draw.circle(fallback, (255, 255, 255), (16, 16), 8)
+            self.animation_frames = [fallback]
+
+    def update(self, dt):
+        """Обновляет анимацию"""
+        if not self.collected and self.animation_frames:
+            self.animation_timer += dt
+            if self.animation_timer >= self.animation_speed:
+                self.animation_timer = 0
+                self.current_frame = (self.current_frame + 1) % len(self.animation_frames)
+
+    def collect(self, character_name):
+        """Собирает ключ"""
+        if not self.collected:
+            self.collected = True
+            return True
+        return False
+
+    def draw(self, screen, camera):
+        """Отрисовка анимированного ключа"""
+        if self.collected or not self.animation_frames:
+            return
+            
+        screen_x, screen_y = camera.apply(self.x, self.y)
+        current_sprite = self.animation_frames[self.current_frame]
+        sprite_width = current_sprite.get_width()
+        sprite_height = current_sprite.get_height()
+        
+        if -sprite_width <= screen_x <= SCREEN_WIDTH and -sprite_height <= screen_y <= SCREEN_HEIGHT:
+            screen.blit(current_sprite, (screen_x, screen_y))
+
+class Potion:
+    def __init__(self, x, y, potion_type="red"):
+        self.x = x
+        self.y = y
+        self.potion_type = potion_type
+        self.collected = False
+        self.rect = pygame.Rect(x, y, 24, 32)
+        self.load_texture()
+
+    def load_texture(self):
+        """Загружает текстуру зелья"""
+        try:
+            if self.potion_type == "red":
+                self.texture = pygame.image.load(os.path.join("assets", "items", "Red Potion.png")).convert_alpha()
+            elif self.potion_type == "green":
+                self.texture = pygame.image.load(os.path.join("assets", "items", "Green Potion.png")).convert_alpha()
+            elif self.potion_type == "blue":
+                self.texture = pygame.image.load(os.path.join("assets", "items", "Blue Potion.png")).convert_alpha()
+            
+            # Сохраняем пропорции при масштабировании
+            original_size = self.texture.get_size()
+            aspect_ratio = original_size[0] / original_size[1]
+            new_height = 32
+            new_width = int(new_height * aspect_ratio)
+            self.texture = pygame.transform.scale(self.texture, (new_width, new_height))
+            
+            # Обновляем rect с новыми размерами
+            self.rect = pygame.Rect(self.x, self.y, new_width, new_height)
+        except:
+            self.texture = None
+
+    def collect(self, character_name):
+        """Собирает зелье"""
+        if not self.collected:
+            self.collected = True
+            return True
+        return False
+
+    def draw(self, screen, camera):
+        """Отрисовка зелья"""
+        if self.collected:
+            return
+            
+        screen_x, screen_y = camera.apply(self.x, self.y)
+        if self.texture:
+            texture_width = self.texture.get_width()
+            texture_height = self.texture.get_height()
+            if -texture_width <= screen_x <= SCREEN_WIDTH and -texture_height <= screen_y <= SCREEN_HEIGHT:
+                screen.blit(self.texture, (screen_x, screen_y))
+        else:
+            # Fallback
+            color = (255, 0, 0) if self.potion_type == "red" else (0, 255, 0) if self.potion_type == "green" else (0, 0, 255)
+            pygame.draw.rect(screen, color, (screen_x, screen_y, 24, 32))
+
+class Lamp:
+    def __init__(self, x, y):
+        self.x = x
+        self.y = y
+        self.width = 32
+        self.height = 64
+        self.rect = pygame.Rect(x, y, self.width, self.height)
+        self.load_texture()
+
+    def load_texture(self):
+        """Загружает текстуру фонаря"""
+        try:
+            self.texture = pygame.image.load(os.path.join("assets", "tiles", "oak_woods_v1.0", "decorations", "lamp.png")).convert_alpha()
+            self.texture = pygame.transform.scale(self.texture, (self.width, self.height))
+        except:
+            self.texture = None
+
+    def draw(self, screen, camera):
+        """Отрисовка фонаря"""
+        screen_x, screen_y = camera.apply(self.x, self.y)
+        if -self.width <= screen_x <= SCREEN_WIDTH and -self.height <= screen_y <= SCREEN_HEIGHT:
+            if self.texture:
+                screen.blit(self.texture, (screen_x, screen_y))
+            else:
+                # Fallback - простой фонарь
+                pygame.draw.rect(screen, (139, 69, 19), (screen_x, screen_y + 40, 8, 24))  # Столб
+                pygame.draw.circle(screen, (255, 255, 0), (screen_x + 4, screen_y + 20), 12)  # Свет
+                pygame.draw.circle(screen, (255, 255, 255), (screen_x + 4, screen_y + 20), 8)  # Лампа
+
+class MovingPlatform(Platform):
+    def __init__(self, x, y, width, height, target_x, target_y, platform_type="moving", movement_type="linear"):
+        super().__init__(x, y, width, height, platform_type)
+        self.start_x = x
+        self.start_y = y
+        self.target_x = target_x
+        self.target_y = target_y
+        self.is_moving = False
+        self.move_speed = 2
+        self.activated = False
+        self.movement_type = movement_type  # "linear", "horizontal", "vertical"
+        self.direction = 1  # Направление движения для циклических платформ
+        self.move_distance = 100  # Расстояние движения для циклических платформ
+
+    def activate(self):
+        """Активирует движение платформы"""
+        if not self.activated:
+            self.activated = True
+            self.is_moving = True
+
+    def update(self):
+        """Обновляет позицию платформы"""
+        if not self.activated:
+            return
+            
+        if self.movement_type == "linear":
+            # Линейное движение к цели
+            if self.is_moving:
+                dx = self.target_x - self.x
+                dy = self.target_y - self.y
+                distance = (dx * dx + dy * dy) ** 0.5
+                
+                if distance > self.move_speed:
+                    self.x += (dx / distance) * self.move_speed
+                    self.y += (dy / distance) * self.move_speed
+                    self.rect.x = self.x
+                    self.rect.y = self.y
+                else:
+                    self.x = self.target_x
+                    self.y = self.target_y
+                    self.rect.x = self.x
+                    self.rect.y = self.y
+                    self.is_moving = False
+                    
+        elif self.movement_type == "horizontal":
+            # Горизонтальное движение туда-сюда
+            self.x += self.direction * self.move_speed
+            
+            # Проверяем границы движения
+            if self.x >= self.start_x + self.move_distance:
+                self.x = self.start_x + self.move_distance
+                self.direction = -1
+            elif self.x <= self.start_x - self.move_distance:
+                self.x = self.start_x - self.move_distance
+                self.direction = 1
+                
+            self.rect.x = self.x
+            
+        elif self.movement_type == "vertical":
+            # Вертикальное движение туда-сюда
+            self.y += self.direction * self.move_speed
+            
+            # Проверяем границы движения
+            if self.y >= self.start_y + self.move_distance:
+                self.y = self.start_y + self.move_distance
+                self.direction = -1
+            elif self.y <= self.start_y - self.move_distance:
+                self.y = self.start_y - self.move_distance
+                self.direction = 1
+                
+            self.rect.y = self.y
 
 class Game:
     def __init__(self, host, is_host):
@@ -545,6 +1084,15 @@ class Game:
             "current_speaker": None,
             "dialog_completed": False
         }
+        
+        # Создаем платформы и препятствия
+        self.platforms = self.create_platforms()
+        self.animated_keys = self.create_animated_keys()
+        self.potions = self.create_potions()
+        self.lamps = self.create_lamps()
+        self.collected_keys = 0
+        self.collected_potions = 0
+        self.moving_platforms = self.create_moving_platforms()
 
     def create_shadow(self):
         """Создает градиент затемнения сверху"""
@@ -578,22 +1126,152 @@ class Game:
         return platform
 
     def create_background(self):
-        """Создает текстурированный фон почвы"""
-        background = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT))
-        background.fill(DIRT_DARK)  # Делаем фон немного темнее
+        """Создает многослойный фон пещеры с параллаксом"""
+        backgrounds = {}
         
-        # Добавляем вариации цвета для создания текстуры
-        for _ in range(2000):
-            x = random.randint(0, SCREEN_WIDTH)
-            y = random.randint(0, SCREEN_HEIGHT)
-            size = random.randint(2, 6)
-            color = random.choice([DIRT_DARK, DIRT_BROWN])
-            pygame.draw.ellipse(background, color, (x, y, size, size * 0.7))
+        try:
+            # Загружаем 4 слоя фона пещеры с правильными именами
+            bg1 = pygame.image.load(os.path.join("assets", "tiles", "background_caves  1.png")).convert_alpha()
+            bg2 = pygame.image.load(os.path.join("assets", "tiles", "background_caves  2.png")).convert_alpha()
+            bg3 = pygame.image.load(os.path.join("assets", "tiles", "background_caves  3.png")).convert_alpha()
+            bg4 = pygame.image.load(os.path.join("assets", "tiles", "background_caves  4.png")).convert_alpha()
+            
+            # Масштабируем фоны под размер экрана
+            backgrounds['layer1'] = pygame.transform.scale(bg1, (SCREEN_WIDTH, SCREEN_HEIGHT))
+            backgrounds['layer2'] = pygame.transform.scale(bg2, (SCREEN_WIDTH, SCREEN_HEIGHT))
+            backgrounds['layer3'] = pygame.transform.scale(bg3, (SCREEN_WIDTH, SCREEN_HEIGHT))
+            backgrounds['layer4'] = pygame.transform.scale(bg4, (SCREEN_WIDTH, SCREEN_HEIGHT))
+            
+        except Exception as e:
+            print(f"Ошибка загрузки фона: {e}")
+            # Fallback - создаем простой градиентный фон пещеры
+            background = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT))
+            for y in range(SCREEN_HEIGHT):
+                # Градиент от темно-серого к черному
+                color_value = max(20, 80 - (y * 60 // SCREEN_HEIGHT))
+                color = (color_value, color_value - 10, color_value - 5)
+                pygame.draw.line(background, color, (0, y), (SCREEN_WIDTH, y))
+            
+            backgrounds['layer1'] = background
+            backgrounds['layer2'] = background.copy()
+            backgrounds['layer3'] = background.copy()
+            backgrounds['layer4'] = background.copy()
         
-        return background
+        return backgrounds
+
+    def create_platforms(self):
+        """Создает платформы и препятствия для кооперативного прохождения"""
+        platforms = []
+        
+        # Обычные платформы для прыжков (подняты выше)
+        platforms.append(Platform(800, 750, 100, 20))
+        platforms.append(Platform(1000, 700, 100, 20))
+        platforms.append(Platform(1300, 650, 100, 20))
+        
+        # Высокие платформы для зайца (подняты выше)
+        platforms.append(Platform(1600, 550, 120, 20))
+        platforms.append(Platform(1900, 500, 100, 20))
+        platforms.append(Platform(2200, 450, 100, 20))
+        
+        # Низкие платформы для Алисы (триггеры для подвижных платформ)
+        platforms.append(Platform(1800, 800, 100, 20, "alice_trigger"))
+        platforms.append(Platform(2000, 770, 100, 20, "alice_trigger"))
+        platforms.append(Platform(2300, 750, 100, 20))
+        
+        # Финальные платформы для совместного прохождения
+        platforms.append(Platform(2800, 600, 150, 20))
+        platforms.append(Platform(3000, 550, 150, 20))
+        
+        # Выход
+        platforms.append(Platform(3200, 500, 200, 20))
+        
+        return platforms
+
+    def create_animated_keys(self):
+        """Создает анимированные ключи"""
+        keys = []
+        
+        # Ключи на разных платформах (обновленные позиции)
+        keys.append(AnimatedKey(850, 720, "key2"))   # На первой платформе
+        keys.append(AnimatedKey(1650, 520, "key5"))  # На высокой платформе зайца
+        keys.append(AnimatedKey(1850, 770, "key15")) # На платформе Алисы
+        
+        return keys
+
+    def create_potions(self):
+        """Создает зелья"""
+        potions = []
+        
+        # Зелья на других позициях (обновленные)
+        potions.append(Potion(950, 720, "red"))    # На первой платформе (сдвинуто)
+        potions.append(Potion(1750, 520, "green")) # На высокой платформе зайца (сдвинуто)
+        potions.append(Potion(1950, 770, "blue"))  # На платформе Алисы (сдвинуто)
+        
+        return potions
+
+    def create_lamps(self):
+        """Создает фонари"""
+        lamps = []
+        
+        # Фонари на уровне земли
+        ground_level = WORLD_HEIGHT - PLATFORM_HEIGHT - 64  # На уровне земли
+        lamps.append(Lamp(750, ground_level))   # У старта
+        lamps.append(Lamp(1250, ground_level))  # На пути
+        lamps.append(Lamp(1750, ground_level))  # У платформ Алисы
+        lamps.append(Lamp(2150, ground_level))  # У высоких платформ зайца
+        lamps.append(Lamp(2750, ground_level))  # У финала
+        
+        return lamps
+
+    def create_moving_platforms(self):
+        """Создает подвижные платформы для зайца и Алисы"""
+        moving_platforms = []
+        
+        # Платформы для кролика - горизонтальное движение
+        moving_platforms.append(MovingPlatform(1500, 600, 100, 20, 0, 0, "moving", "horizontal"))
+        moving_platforms.append(MovingPlatform(2100, 550, 100, 20, 0, 0, "moving", "horizontal"))
+        
+        # Платформы для Алисы - вертикальное движение
+        moving_platforms.append(MovingPlatform(1700, 700, 100, 20, 0, 0, "moving", "vertical"))
+        moving_platforms.append(MovingPlatform(2300, 650, 100, 20, 0, 0, "moving", "vertical"))
+        
+        # Активируем их сразу для демонстрации
+        for platform in moving_platforms:
+            platform.activate()
+        
+        return moving_platforms
+
+    def check_platform_activation(self):
+        """Проверяет активацию подвижных платформ"""
+        triggered_platforms = self.my_player.check_platform_triggers(self.platforms)
+        
+        for platform in triggered_platforms:
+            # Когда Алиса становится на платформу, активируем соответствующую подвижную платформу
+            platform_id = f"{platform.x}_{platform.y}"
+            
+            # Активируем подвижные платформы в зависимости от триггера
+            if platform.x == 1800:  # Первая платформа Алисы
+                if len(self.moving_platforms) > 0 and not self.moving_platforms[0].activated:
+                    self.moving_platforms[0].activate()
+                    print("Активирована первая подвижная платформа для зайца!")
+            elif platform.x == 2000:  # Вторая платформа Алисы
+                if len(self.moving_platforms) > 1 and not self.moving_platforms[1].activated:
+                    self.moving_platforms[1].activate()
+                    print("Активирована вторая подвижная платформа для зайца!")
 
     def send_data(self):
         """Отправка данных другому игроку"""
+        # Собираем данные о собранных предметах
+        collected_keys_data = []
+        for i, key in enumerate(self.animated_keys):
+            if key.collected:
+                collected_keys_data.append(i)
+        
+        collected_potions_data = []
+        for i, potion in enumerate(self.potions):
+            if potion.collected:
+                collected_potions_data.append(i)
+        
         data = pickle.dumps({
             "player": {
                 "x": self.my_player.x,
@@ -601,7 +1279,9 @@ class Game:
                 "facing_right": self.my_player.facing_right,
                 "moving": self.my_player.moving
             },
-            "dialog": self.dialog_state
+            "dialog": self.dialog_state,
+            "collected_keys": collected_keys_data,
+            "collected_potions": collected_potions_data
         })
         self.socket.sendto(data, self.other_address)
 
@@ -618,6 +1298,17 @@ class Game:
                 self.other_player.y = player_data["y"]
                 self.other_player.facing_right = player_data["facing_right"]
                 self.other_player.moving = player_data["moving"]
+                
+                # Синхронизируем собранные предметы
+                if "collected_keys" in received_data:
+                    for key_index in received_data["collected_keys"]:
+                        if key_index < len(self.animated_keys):
+                            self.animated_keys[key_index].collected = True
+                
+                if "collected_potions" in received_data:
+                    for potion_index in received_data["collected_potions"]:
+                        if potion_index < len(self.potions):
+                            self.potions[potion_index].collected = True
                 
                 # Синхронизируем состояние диалога
                 other_dialog_state = received_data["dialog"]
@@ -648,14 +1339,14 @@ class Game:
         # Обновляем состояние диалога
         if other_dialog_state["current_dialog_id"] != self.dialog_state["current_dialog_id"]:
             print(f"Переход к диалогу: {other_dialog_state['current_dialog_id']}")
-            self.dialog_state.update(other_dialog_state)
-            
-            if other_dialog_state["current_dialog_id"]:
-                self.dialog_system.reset_state()
-                self.dialog_system.start_dialog(
-                    other_dialog_state["current_dialog_id"], 
-                    self.my_player.character_name
-                )
+        self.dialog_state.update(other_dialog_state)
+        
+        if other_dialog_state["current_dialog_id"]:
+            self.dialog_system.reset_state()
+            self.dialog_system.start_dialog(
+                other_dialog_state["current_dialog_id"], 
+                self.my_player.character_name
+            )
 
     def start_dialog(self, dialog_id):
         """Начало диалога"""
@@ -679,7 +1370,7 @@ class Game:
         """Обработка выбора варианта ответа"""
         if not self.dialog_system.my_turn or not self.dialog_system.current_dialog:
             return
-            
+
         if choice_index >= len(self.dialog_system.current_dialog.get("choices", [])):
             return
             
@@ -720,7 +1411,7 @@ class Game:
             not self.dialog_system.dialog_completed and
             self.my_player.character_name == "alice"):
             
-            self.start_dialog("start")
+                    self.start_dialog("start")
 
     def handle_input(self, event):
         """Обработка ввода для диалогов"""
@@ -731,6 +1422,67 @@ class Game:
         if choice is not None:
             print(f"Выбран вариант {choice + 1}")
             self.make_choice(choice)
+
+    def draw_ui(self, screen):
+        """Отрисовка пользовательского интерфейса"""
+        # Показываем UI только после завершения диалога
+        if not self.dialog_system.dialog_completed:
+            return
+            
+        # Используем пиксельный шрифт
+        try:
+            pixel_font = pygame.font.Font(os.path.join("assets", "fonts", "visitor2.otf"), 20)
+        except:
+            # Fallback на системный шрифт
+            pixel_font = pygame.font.Font(None, 20)
+        
+        # Показываем количество собранных ключей
+        keys_text = pixel_font.render(f"Ключи: {self.collected_keys}/3", True, (255, 255, 255))
+        screen.blit(keys_text, (10, 10))
+        
+        # Показываем количество собранных зелий
+        potions_text = pixel_font.render(f"Зелья: {self.collected_potions}/3", True, (255, 255, 255))
+        screen.blit(potions_text, (10, 35))
+        
+        # Показываем прогресс
+        if self.collected_keys == 3 and self.collected_potions == 3:
+            victory_text = pixel_font.render("Все предметы собраны! Найдите выход из норы!", True, (0, 255, 0))
+            screen.blit(victory_text, (10, SCREEN_HEIGHT - 30))
+
+    def draw_background_with_parallax(self, screen):
+        """Отрисовывает многослойный фон с эффектом параллакса"""
+        # Вычисляем смещение для параллакса
+        parallax_factor_1 = 0.1  # Самый дальний слой
+        parallax_factor_2 = 0.3
+        parallax_factor_3 = 0.5
+        parallax_factor_4 = 0.7  # Ближайший слой
+        
+        # Вычисляем смещения
+        offset_1 = int(self.camera.scroll_x * parallax_factor_1)
+        offset_2 = int(self.camera.scroll_x * parallax_factor_2)
+        offset_3 = int(self.camera.scroll_x * parallax_factor_3)
+        offset_4 = int(self.camera.scroll_x * parallax_factor_4)
+        
+        # Отрисовываем слои с параллаксом
+        # Слой 1 - самый дальний
+        screen.blit(self.background['layer1'], (-offset_1, 0))
+        if offset_1 > 0:
+            screen.blit(self.background['layer1'], (SCREEN_WIDTH - offset_1, 0))
+        
+        # Слой 2
+        screen.blit(self.background['layer2'], (-offset_2, 0))
+        if offset_2 > 0:
+            screen.blit(self.background['layer2'], (SCREEN_WIDTH - offset_2, 0))
+        
+        # Слой 3
+        screen.blit(self.background['layer3'], (-offset_3, 0))
+        if offset_3 > 0:
+            screen.blit(self.background['layer3'], (SCREEN_WIDTH - offset_3, 0))
+        
+        # Слой 4 - ближайший
+        screen.blit(self.background['layer4'], (-offset_4, 0))
+        if offset_4 > 0:
+            screen.blit(self.background['layer4'], (SCREEN_WIDTH - offset_4, 0))
 
     def run(self):
         running = True
@@ -747,7 +1499,7 @@ class Game:
                 if event.type == pygame.QUIT:
                     running = False
                 elif event.type == pygame.KEYDOWN:
-                    if event.key == pygame.K_SPACE and not self.dialog_system.is_active:
+                    if (event.key == pygame.K_SPACE or event.key == pygame.K_w) and not self.dialog_system.is_active:
                         self.my_player.jump()
                     else:
                         self.handle_input(event)
@@ -757,11 +1509,11 @@ class Game:
             if self.dialog_system.is_active:
                 allow_movement = False
 
-            # Обрабатываем нажатия клавиш
-            if allow_movement and not self.dialog_system.dialog_completed:
-                if keys[pygame.K_LEFT]:
+            # Обрабатываем нажатия клавиш - добавляем поддержку WASD
+            if allow_movement:
+                if keys[pygame.K_LEFT] or keys[pygame.K_a]:
                     self.my_player.move(-1)
-                elif keys[pygame.K_RIGHT]:
+                elif keys[pygame.K_RIGHT] or keys[pygame.K_d]:
                     self.my_player.move(1)
                 else:
                     self.my_player.move(0)
@@ -769,8 +1521,36 @@ class Game:
                 self.my_player.move(0)
 
             # Обновление физики и проверка диалога
-            self.my_player.update()
-            self.other_player.update()
+            # Передаем платформы игрокам для проверки коллизий
+            self.my_player._platforms = self.platforms + self.moving_platforms
+            self.other_player._platforms = self.platforms + self.moving_platforms
+            
+            self.my_player.update(self.platforms + self.moving_platforms)
+            self.other_player.update(self.platforms + self.moving_platforms)
+            
+            # Обновляем анимации ключей
+            for key in self.animated_keys:
+                key.update(dt)
+            
+            # Обновляем подвижные платформы
+            for platform in self.moving_platforms:
+                platform.update()
+            
+            # Проверяем сбор ключей
+            collected = self.my_player.check_collectibles(self.animated_keys)
+            if collected:
+                self.collected_keys += len(collected)
+                print(f"Собрано ключей: {self.collected_keys}")
+            
+            # Проверяем сбор зелий
+            collected = self.my_player.check_collectibles(self.potions)
+            if collected:
+                self.collected_potions += len(collected)
+                print(f"Собрано зелий: {self.collected_potions}")
+            
+            # Проверяем активацию подвижных платформ
+            self.check_platform_activation()
+            
             self.check_dialog_trigger()
 
             # Обновление камеры
@@ -789,9 +1569,29 @@ class Game:
             self.send_data()
 
             # Отрисовка
-            self.screen.blit(self.background, (0, 0))
+            # Отрисовываем фон пещеры с параллаксом
+            self.draw_background_with_parallax(self.screen)
+            
             platform_y = SCREEN_HEIGHT - PLATFORM_HEIGHT
             self.screen.blit(self.platform, (0, platform_y))
+            
+            # Отрисовываем дополнительные платформы
+            for platform in self.platforms:
+                platform.draw(self.screen, self.camera)
+            
+            # Отрисовываем подвижные платформы
+            for platform in self.moving_platforms:
+                platform.draw(self.screen, self.camera)
+            
+            # Отрисовываем предметы
+            for collectible in self.animated_keys:
+                collectible.draw(self.screen, self.camera)
+            for collectible in self.potions:
+                collectible.draw(self.screen, self.camera)
+            
+            # Отрисовываем фонари
+            for lamp in self.lamps:
+                lamp.draw(self.screen, self.camera)
             
             # Находим Алису и Кролика
             alice = self.my_player if self.my_player.character_name == "alice" else self.other_player
@@ -803,6 +1603,8 @@ class Game:
             
             self.screen.blit(self.shadow, (0, 0))
             self.dialog_system.draw(self.screen, self.my_player.character_name)
+            
+            self.draw_ui(self.screen)
             
             pygame.display.flip()
             self.clock.tick(60)

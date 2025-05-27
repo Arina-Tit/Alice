@@ -5,6 +5,7 @@ import threading
 import sys
 import os
 import time
+import random
 
 # Инициализация Pygame
 pygame.init()
@@ -20,6 +21,8 @@ ALICE_WIDTH = 192
 ALICE_HEIGHT = 192
 RABBIT_WIDTH = 80
 RABBIT_HEIGHT = 80
+ALICE_OFFSET = 70  # Смещение для Алисы, чтобы компенсировать размер спрайта
+RABBIT_OFFSET = 10  # Небольшое смещение для кролика
 
 # Физика
 GRAVITY = 0.5
@@ -33,9 +36,12 @@ ALICE_ANIMATION_SPEED = 0.04
 RABBIT_IDLE_ANIMATION_SPEED = 0.15
 RABBIT_WALK_ANIMATION_SPEED = 0.06
 
-# Цвета
-WHITE = (255, 255, 255)
-GRAY = (100, 100, 100)
+DIRT_BROWN = (65, 50, 35)  
+DIRT_DARK = (55, 40, 25)   
+DIRT_LIGHT = (75, 60, 45)  
+PLATFORM_HEIGHT = 50  
+SHADOW_HEIGHT = 400  
+SHADOW_ALPHA = 200  
 
 class SpriteSheet:
     def __init__(self, frames, animation_speed, width, height):
@@ -200,7 +206,6 @@ class Player:
     def __init__(self, x, y, character_name):
         self.x = x
         self.y = y
-        self.base_y = y  # Сохраняем базовую высоту
         self.character_name = character_name
         self.vel_y = 0
         self.is_jumping = False
@@ -208,6 +213,7 @@ class Player:
         self.moving = False
         self.width = ALICE_WIDTH if character_name == "alice" else RABBIT_WIDTH
         self.height = ALICE_HEIGHT if character_name == "alice" else RABBIT_HEIGHT
+        self.offset = ALICE_OFFSET if character_name == "alice" else RABBIT_OFFSET
         self.sprites = {
             "idle": load_sprite(character_name, "idle"),
             "walk": load_sprite(character_name, "walk")
@@ -252,9 +258,10 @@ class Player:
         self.vel_y += GRAVITY
         self.y += self.vel_y
 
-        # Обработка приземления с учетом базовой высоты
-        if self.y > self.base_y:
-            self.y = self.base_y
+        # Обработка приземления на платформу
+        platform_y = WORLD_HEIGHT - PLATFORM_HEIGHT
+        if self.y > platform_y - self.height + self.offset:
+            self.y = platform_y - self.height + self.offset
             if self.vel_y > 0:  # Если падали вниз
                 self.vel_y = 0
                 self.is_jumping = False
@@ -274,15 +281,19 @@ class Game:
         self.clock = pygame.time.Clock()
         self.camera = Camera(SCREEN_WIDTH, SCREEN_HEIGHT)
         
+        # Создаем фон и платформу
         self.background = self.create_background()
+        self.platform = self.create_platform()
+        self.shadow = self.create_shadow()
 
         # Создание игроков с соответствующими спрайтами
+        platform_y = WORLD_HEIGHT - PLATFORM_HEIGHT
         if is_host:
-            self.my_player = Player(100, WORLD_HEIGHT - ALICE_HEIGHT, "alice")
-            self.other_player = Player(250, WORLD_HEIGHT - RABBIT_HEIGHT - 50, "rabbit")
+            self.my_player = Player(100, platform_y - ALICE_HEIGHT + ALICE_OFFSET, "alice")
+            self.other_player = Player(250, platform_y - RABBIT_HEIGHT + RABBIT_OFFSET, "rabbit")
         else:
-            self.my_player = Player(250, WORLD_HEIGHT - RABBIT_HEIGHT - 50, "rabbit")
-            self.other_player = Player(100, WORLD_HEIGHT - ALICE_HEIGHT, "alice")
+            self.my_player = Player(250, platform_y - RABBIT_HEIGHT + RABBIT_OFFSET, "rabbit")
+            self.other_player = Player(100, platform_y - ALICE_HEIGHT + ALICE_OFFSET, "alice")
 
         # Настройка сети
         self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -298,14 +309,51 @@ class Game:
         self.receive_thread.daemon = True
         self.receive_thread.start()
 
-    def create_background(self):
-        background = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT))
-        background.fill(WHITE)
-        return background
+    def create_shadow(self):
+        """Создает градиент затемнения сверху"""
+        shadow = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
+        
+        # Создаем градиент от темного к прозрачному
+        for y in range(SHADOW_HEIGHT):
+            # Нелинейный градиент для более плавного перехода
+            progress = y / SHADOW_HEIGHT
+            alpha = int(SHADOW_ALPHA * (1 - progress * progress))
+            pygame.draw.line(shadow, (0, 0, 0, alpha), (0, y), (SCREEN_WIDTH, y))
+            
+        return shadow
 
-    def draw_background(self):
-        # Просто заливаем экран белым цветом
-        self.screen.blit(self.background, (0, 0))
+    def create_platform(self):
+        """Создает платформу для ходьбы"""
+        platform = pygame.Surface((SCREEN_WIDTH, PLATFORM_HEIGHT))
+        platform.fill(DIRT_BROWN)
+        
+        # Добавляем текстуру на платформу
+        for _ in range(500):  # Меньше вариаций для платформы
+            x = random.randint(0, SCREEN_WIDTH)
+            y = random.randint(0, PLATFORM_HEIGHT)
+            size = random.randint(2, 4)
+            color = random.choice([DIRT_DARK, DIRT_LIGHT])
+            pygame.draw.ellipse(platform, color, (x, y, size, size * 0.7))
+        
+        # Добавляем верхнюю границу платформы
+        pygame.draw.line(platform, DIRT_LIGHT, (0, 0), (SCREEN_WIDTH, 0), 2)
+        
+        return platform
+
+    def create_background(self):
+        """Создает текстурированный фон почвы"""
+        background = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT))
+        background.fill(DIRT_DARK)  # Делаем фон немного темнее
+        
+        # Добавляем вариации цвета для создания текстуры
+        for _ in range(2000):
+            x = random.randint(0, SCREEN_WIDTH)
+            y = random.randint(0, SCREEN_HEIGHT)
+            size = random.randint(2, 6)
+            color = random.choice([DIRT_DARK, DIRT_BROWN])
+            pygame.draw.ellipse(background, color, (x, y, size, size * 0.7))
+        
+        return background
 
     def receive_data(self):
         while True:
@@ -364,9 +412,12 @@ class Game:
             self.send_data()
 
             # Отрисовка
-            self.draw_background()
+            self.screen.blit(self.background, (0, 0))
+            platform_y = SCREEN_HEIGHT - PLATFORM_HEIGHT
+            self.screen.blit(self.platform, (0, platform_y))
             self.my_player.draw(self.screen, self.camera)
             self.other_player.draw(self.screen, self.camera)
+            self.screen.blit(self.shadow, (0, 0))  # Добавляем затемнение поверх всего
             
             pygame.display.flip()
             self.clock.tick(60)

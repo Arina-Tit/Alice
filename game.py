@@ -1090,17 +1090,272 @@ class Game:
         self.clock = pygame.time.Clock()
         self.camera = Camera(SCREEN_WIDTH, SCREEN_HEIGHT)
         
-        # Создаем фон и платформу
+        # Создаем экран истории
+        self.story_screen = StoryScreen()
+        self.game_started = False
+        self.other_player_connected = False
+        self.connection_timer = 0
+        self.story_timer = 0
+        self.is_host = is_host
+        self.connection_established = False
+        self.last_sync_time = time.time()
+        self.sync_interval = 0.05  # 50ms интервал синхронизации
+        self.connection_attempts = 0
+        self.max_connection_attempts = 10
+        self.connection_timeout = 5.0  # 5 секунд таймаут
+        self.last_connection_attempt = time.time()
+        
+        # Настройка сети
+        try:
+            self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            self.socket.settimeout(0.1)  # Устанавливаем неблокирующий режим с таймаутом
+            
+            if is_host:
+                try:
+                    self.socket.bind((host, 5000))
+                    self.other_address = (host, 5001)
+                    print("Хост: Сервер запущен и ожидает подключения клиента...")
+                except socket.error as e:
+                    print(f"Ошибка при создании хоста: {e}")
+                    raise
+            else:
+                try:
+                    self.socket.bind((host, 5001))
+                    self.other_address = (host, 5000)
+                    print("Клиент: Подключение к хосту...")
+                except socket.error as e:
+                    print(f"Ошибка при создании клиента: {e}")
+                    raise
+                    
+            # Запуск потока для приема данных
+            self.receive_thread = threading.Thread(target=self.receive_data)
+            self.receive_thread.daemon = True
+            self.receive_thread.start()
+            
+        except Exception as e:
+            print(f"Критическая ошибка при инициализации сети: {e}")
+            pygame.quit()
+            sys.exit(1)
+        
+        # Инициализация остальных компонентов
+        self.init_game_components()
+        
+        # Отправляем начальное сообщение о подключении
+        self.send_connection_message()
+
+    def send_connection_message(self):
+        """Отправляет сообщение о подключении"""
+        try:
+            data = pickle.dumps({
+                "type": "connection",
+                "connected": True,
+                "story": {
+                    "stage": self.story_screen.current_stage,
+                    "text_index": self.story_screen.current_text_index,
+                    "timer": self.story_screen.story_timer
+                },
+                "timestamp": time.time()
+            })
+            self.socket.sendto(data, self.other_address)
+            self.connection_attempts += 1
+            self.last_connection_attempt = time.time()
+            print(f"{'Хост' if self.is_host else 'Клиент'}: Попытка подключения {self.connection_attempts}")
+        except Exception as e:
+            print(f"Ошибка при отправке сообщения о подключении: {e}")
+
+    def handle_connection(self, received_data):
+        """Обрабатывает подключение второго игрока"""
+        if received_data.get("type") == "connection" and received_data.get("connected", False):
+            if not self.connection_established:
+                print(f"{'Хост' if self.is_host else 'Клиент'}: Установлено соединение!")
+                self.connection_established = True
+                self.other_player_connected = True
+                
+                # Отправляем подтверждение подключения
+                try:
+                    confirm_data = pickle.dumps({
+                        "type": "connection_confirm",
+                        "connected": True,
+                        "story": {
+                            "stage": self.story_screen.current_stage,
+                            "text_index": self.story_screen.current_text_index,
+                            "timer": self.story_screen.story_timer
+                        }
+                    })
+                    self.socket.sendto(confirm_data, self.other_address)
+                except Exception as e:
+                    print(f"Ошибка при отправке подтверждения подключения: {e}")
+                
+                # Хост начинает историю только после получения подтверждения от клиента
+                if self.is_host:
+                    print("Хост: Начинаем историю")
+                    self.story_screen.current_stage = "ready"
+                    self.story_screen.ready_timer = 0
+                else:
+                    print("Клиент: Ожидаем начала истории")
+                    self.story_screen.current_stage = "waiting"
+            
+            # Синхронизируем состояние истории
+            if "story" in received_data:
+                self.handle_story_sync(received_data["story"])
+
+    def receive_data(self):
+        """Получение данных от другого игрока"""
+        while True:
+            try:
+                data, addr = self.socket.recvfrom(4096)
+                received_data = pickle.loads(data)
+                
+                # Обработка подключения и синхронизации
+                if received_data.get("type") == "connection":
+                    self.handle_connection(received_data)
+                elif received_data.get("type") == "connection_confirm":
+                    self.connection_established = True
+                    self.other_player_connected = True
+                    print(f"{'Хост' if self.is_host else 'Клиент'}: Получено подтверждение подключения")
+                elif received_data.get("type") == "game_state" and self.connection_established:
+                    # Обновляем позицию другого игрока
+                    player_data = received_data["player"]
+                    self.other_player.x = player_data["x"]
+                    self.other_player.y = player_data["y"]
+                    self.other_player.facing_right = player_data["facing_right"]
+                    self.other_player.moving = player_data["moving"]
+                    
+                    # Синхронизируем собранные предметы
+                    for key_index in received_data.get("collected_keys", []):
+                        if key_index < len(self.animated_keys):
+                            self.animated_keys[key_index].collected = True
+                            
+                    for potion_index in received_data.get("collected_potions", []):
+                        if potion_index < len(self.potions):
+                            self.potions[potion_index].collected = True
+                    
+                    # Синхронизируем состояние истории
+                    if "story" in received_data:
+                        self.handle_story_sync(received_data["story"])
+                    
+            except socket.timeout:
+                # Проверяем необходимость переподключения
+                if not self.connection_established:
+                    current_time = time.time()
+                    if (current_time - self.last_connection_attempt >= 1.0 and 
+                        self.connection_attempts < self.max_connection_attempts):
+                        self.send_connection_message()
+                continue
+            except Exception as e:
+                print(f"Ошибка при получении данных: {e}")
+                continue
+
+    def run(self):
+        """Основной игровой цикл"""
+        running = True
+        last_time = time.time()
+        connection_start_time = time.time()
+        
+        while running:
+            current_time = time.time()
+            dt = current_time - last_time
+            last_time = current_time
+            
+            # Проверка таймаута подключения
+            if not self.connection_established:
+                if current_time - connection_start_time > self.connection_timeout:
+                    if self.connection_attempts >= self.max_connection_attempts:
+                        print("Не удалось установить соединение после нескольких попыток")
+                        running = False
+                        break
+                    else:
+                        connection_start_time = current_time
+                        self.send_connection_message()
+            
+            # Обработка событий
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    running = False
+                elif event.type == pygame.KEYDOWN:
+                    if event.key == pygame.K_SPACE and self.story_screen.current_stage == "game":
+                        self.my_player.jump()
+                    elif event.key == pygame.K_RETURN:
+                        if self.story_screen.current_stage == "ready":
+                            if self.is_host:
+                                print("Хост: Запуск истории")
+                                self.story_screen.current_stage = "story"
+                                self.story_screen.story_timer = 0
+                                self.story_screen.current_text_index = 0
+            
+            # Обновление состояния
+            current_stage = self.story_screen.current_stage
+            
+            if current_stage == "game":
+                # Обработка движения
+                keys = pygame.key.get_pressed()
+                direction = 0
+                if keys[pygame.K_LEFT] or keys[pygame.K_a]:
+                    direction = -1
+                elif keys[pygame.K_RIGHT] or keys[pygame.K_d]:
+                    direction = 1
+                self.my_player.move(direction)
+                
+                # Обновление игровой логики
+                self.my_player.update(self.platforms)
+                for platform in self.moving_platforms:
+                    platform.update()
+                    
+                # Проверка коллекций
+                collected_keys = self.my_player.check_collectibles(self.animated_keys)
+                collected_potions = self.my_player.check_collectibles(self.potions)
+                self.collected_keys += len(collected_keys)
+                self.collected_potions += len(collected_potions)
+                
+                # Проверка активации платформ и победы
+                self.check_platform_activation()
+                self.check_victory_condition()
+                
+                # Обновление камеры
+                self.camera.update(self.my_player.x + self.my_player.width//2,
+                                 self.my_player.y + self.my_player.height//2)
+            else:
+                # Обновление истории
+                self.story_screen.update(dt)
+            
+            # Отрисовка
+            self.screen.fill((0, 0, 0))
+            
+            if current_stage != "game":
+                self.story_screen.draw(self.screen)
+            else:
+                # Отрисовка игрового мира
+                self.draw_game_world(dt)  # Передаем dt в метод
+                
+                if self.victory_achieved:
+                    self.victory_timer += dt
+                    self.draw_victory_screen(self.screen)
+            
+            # Отправка данных только если установлено соединение
+            if self.connection_established:
+                self.send_data()
+            
+            pygame.display.flip()
+            self.clock.tick(60)
+        
+        # Закрываем сокет при выходе
+        try:
+            self.socket.close()
+        except:
+            pass
+        
+        pygame.quit()
+        sys.exit()
+
+    def init_game_components(self):
+        """Инициализация игровых компонентов"""
         self.background = self.create_background()
         self.platform = self.create_platform()
         self.shadow = self.create_shadow()
         
-        # Загружаем финальные картинки
+        # Загружаем улыбку
         try:
-            self.final_image = pygame.image.load(os.path.join("assets", "tiles", "Final level.png")).convert_alpha()
-            self.final_image = pygame.transform.scale(self.final_image, (SCREEN_WIDTH, SCREEN_HEIGHT))
-            print("Final level.png успешно загружен")
-            
             smile_path = os.path.join("assets", "tiles", "Smile.png")
             if not os.path.exists(smile_path):
                 print(f"Ошибка: файл {smile_path} не найден")
@@ -1111,46 +1366,19 @@ class Game:
                 print("Smile.png успешно загружен")
         except Exception as e:
             print(f"Ошибка при загрузке картинок: {e}")
-            print(f"Проверьте наличие файлов в папке assets/tiles/")
-            self.final_image = None
             self.smile_image = None
 
-        # Создание игроков с соответствующими спрайтами
+        # Создание игроков
         platform_y = WORLD_HEIGHT - PLATFORM_HEIGHT
-        if is_host:
+        if self.is_host:
             self.my_player = Player(100, platform_y - ALICE_HEIGHT + ALICE_OFFSET, "alice")
             self.other_player = Player(250, platform_y - RABBIT_HEIGHT + RABBIT_OFFSET, "rabbit")
         else:
             self.my_player = Player(250, platform_y - RABBIT_HEIGHT + RABBIT_OFFSET, "rabbit")
             self.other_player = Player(100, platform_y - ALICE_HEIGHT + ALICE_OFFSET, "alice")
 
-        # Настройка сети
-        self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        if is_host:
-            self.socket.bind((host, 5000))
-            self.other_address = (host, 5001)
-        else:
-            self.socket.bind((host, 5001))
-            self.other_address = (host, 5000)
-
-        # Запуск потока для приема данных
-        self.receive_thread = threading.Thread(target=self.receive_data)
-        self.receive_thread.daemon = True
-        self.receive_thread.start()
-
-        # Добавляем систему диалогов
+        # Инициализация остальных компонентов
         self.dialog_system = DialogSystem()
-        self.is_host = is_host
-        
-        # Упрощенное состояние диалога для синхронизации
-        self.dialog_state = {
-            "is_active": False,
-            "current_dialog_id": None,
-            "current_speaker": None,
-            "dialog_completed": False
-        }
-        
-        # Создаем платформы и препятствия
         self.platforms = self.create_platforms()
         self.animated_keys = self.create_animated_keys()
         self.potions = self.create_potions()
@@ -1160,11 +1388,46 @@ class Game:
         self.collected_keys = 0
         self.collected_potions = 0
         self.moving_platforms = self.create_moving_platforms()
-        
-        # Состояние финала
         self.victory_achieved = False
         self.victory_timer = 0
-        self.victory_duration = 5.0  # 5 секунд показа финального экрана
+        self.victory_duration = 5.0
+
+    def send_data(self):
+        """Отправка данных другому игроку"""
+        current_time = time.time()
+        if current_time - self.last_sync_time < self.sync_interval:
+            return
+            
+        self.last_sync_time = current_time
+        
+        try:
+            # Собираем данные о собранных предметах
+            collected_keys_data = [i for i, key in enumerate(self.animated_keys) if key.collected]
+            collected_potions_data = [i for i, potion in enumerate(self.potions) if potion.collected]
+            
+            # Добавляем состояние истории
+            story_state = {
+                "stage": self.story_screen.current_stage,
+                "text_index": self.story_screen.current_text_index,
+                "timer": self.story_screen.story_timer
+            }
+            
+            data = pickle.dumps({
+                "type": "game_state",
+                "player": {
+                    "x": self.my_player.x,
+                    "y": self.my_player.y,
+                    "facing_right": self.my_player.facing_right,
+                    "moving": self.my_player.moving
+                },
+                "collected_keys": collected_keys_data,
+                "collected_potions": collected_potions_data,
+                "story": story_state,
+                "connected": True
+            })
+            self.socket.sendto(data, self.other_address)
+        except Exception as e:
+            print(f"Ошибка при отправке данных: {e}")
 
     def create_shadow(self):
         """Создает градиент затемнения сверху"""
@@ -1465,397 +1728,70 @@ class Game:
                     self.moving_platforms[1].activate()
                     print("Активирована вторая подвижная платформа для зайца!")
 
-    def send_data(self):
-        """Отправка данных другому игроку"""
-        # Собираем данные о собранных предметах
-        collected_keys_data = []
-        for i, key in enumerate(self.animated_keys):
-            if key.collected:
-                collected_keys_data.append(i)
+    def handle_story_sync(self, story_data):
+        """Обрабатывает синхронизацию истории"""
+        current_stage = story_data.get("stage", "waiting")
+        text_index = story_data.get("text_index", 0)
+        timer = story_data.get("timer", 0)
+
+        print(f"Game: Получено состояние истории {current_stage}, индекс {text_index}")
+
+        # Клиент всегда следует за хостом
+        if not self.is_host:
+            if current_stage != self.story_screen.current_stage:
+                print(f"Клиент: Переход в состояние {current_stage}")
+                self.story_screen.current_stage = current_stage
+                self.story_screen.current_text_index = text_index
+                self.story_screen.story_timer = timer
+                if current_stage == "ready":
+                    self.story_screen.ready_timer = 0
         
-        collected_potions_data = []
-        for i, potion in enumerate(self.potions):
-            if potion.collected:
-                collected_potions_data.append(i)
+        # Хост обновляет состояние только в определенных случаях
+        elif self.is_host:
+            if current_stage == "ready" and self.story_screen.current_stage == "waiting":
+                print("Хост: Получено подтверждение от клиента, начинаем историю")
+                self.story_screen.current_stage = "ready"
+                self.story_screen.ready_timer = 0
+            elif current_stage == "story" and self.story_screen.current_stage == "story":
+                # Синхронизируем таймеры во время истории
+                if abs(self.story_screen.story_timer - timer) > 1.0:
+                    self.story_screen.story_timer = (self.story_screen.story_timer + timer) / 2
+
+    def draw_game_world(self, dt):
+        """Отрисовка игрового мира"""
+        # Отрисовка фона с параллаксом
+        camera_x = self.camera.scroll_x
+        for i, (_, bg_surface) in enumerate(self.background.items()):
+            parallax = 0.1 * (i + 1)
+            x = -(camera_x * parallax) % SCREEN_WIDTH
+            self.screen.blit(bg_surface, (x, 0))
+            self.screen.blit(bg_surface, (x - SCREEN_WIDTH, 0))
         
-        data = pickle.dumps({
-            "player": {
-                "x": self.my_player.x,
-                "y": self.my_player.y,
-                "facing_right": self.my_player.facing_right,
-                "moving": self.my_player.moving
-            },
-            "dialog": self.dialog_state,
-            "collected_keys": collected_keys_data,
-            "collected_potions": collected_potions_data,
-            "counters": {
-                "keys": self.collected_keys,
-                "potions": self.collected_potions
-            }
-        })
-        self.socket.sendto(data, self.other_address)
-
-    def receive_data(self):
-        """Получение данных от другого игрока"""
-        while True:
-            try:
-                data, addr = self.socket.recvfrom(1024)
-                received_data = pickle.loads(data)
-                
-                # Обновляем позицию другого игрока
-                player_data = received_data["player"]
-                self.other_player.x = player_data["x"]
-                self.other_player.y = player_data["y"]
-                self.other_player.facing_right = player_data["facing_right"]
-                self.other_player.moving = player_data["moving"]
-                
-                # Синхронизируем собранные предметы
-                if "collected_keys" in received_data:
-                    for key_index in received_data["collected_keys"]:
-                        if key_index < len(self.animated_keys):
-                            self.animated_keys[key_index].collected = True
-                
-                if "collected_potions" in received_data:
-                    for potion_index in received_data["collected_potions"]:
-                        if potion_index < len(self.potions):
-                            self.potions[potion_index].collected = True
-                
-                # Синхронизируем счетчики
-                if "counters" in received_data:
-                    counters = received_data["counters"]
-                    # Обновляем счетчики только если они больше текущих (избегаем дублирования)
-                    if counters["keys"] > self.collected_keys:
-                        self.collected_keys = counters["keys"]
-                    if counters["potions"] > self.collected_potions:
-                        self.collected_potions = counters["potions"]
-                
-                # Синхронизируем состояние диалога
-                other_dialog_state = received_data["dialog"]
-                
-                # Проверяем, нужно ли обновить диалог
-                if (other_dialog_state["is_active"] != self.dialog_state["is_active"] or
-                    other_dialog_state["current_dialog_id"] != self.dialog_state["current_dialog_id"] or
-                    other_dialog_state["current_speaker"] != self.dialog_state["current_speaker"]):
-                    
-                    print("Получено обновление состояния диалога:")
-                    print(f"Активен: {other_dialog_state['is_active']}")
-                    print(f"Текущий диалог: {other_dialog_state['current_dialog_id']}")
-                    print(f"Говорящий: {other_dialog_state['current_speaker']}")
-                    
-                    self.handle_other_player_choice(other_dialog_state)
-            except:
-                pass
-
-    def handle_other_player_choice(self, other_dialog_state):
-        """Обработка выбора другого игрока"""
-        # Проверяем завершение диалога
-        if other_dialog_state.get("dialog_completed") or not other_dialog_state["is_active"]:
-            print("Получено завершение диалога от другого игрока")
-            self.dialog_system.complete_dialog()
-            self.dialog_state.update(other_dialog_state)
-            return
-
-        # Обновляем состояние диалога
-        if other_dialog_state["current_dialog_id"] != self.dialog_state["current_dialog_id"]:
-            print(f"Переход к диалогу: {other_dialog_state['current_dialog_id']}")
-        self.dialog_state.update(other_dialog_state)
+        # Отрисовка игровых объектов
+        for platform in self.platforms:
+            platform.draw(self.screen, self.camera)
+        for platform in self.moving_platforms:
+            platform.draw(self.screen, self.camera)
+        for key in self.animated_keys:
+            key.draw(self.screen, self.camera)
+        for potion in self.potions:
+            potion.draw(self.screen, self.camera)
+        for lamp in self.lamps:
+            lamp.draw(self.screen, self.camera)
+        for decoration in self.decorations:
+            decoration.draw(self.screen, self.camera)
+        for sign in self.signs:
+            sign.update([self.my_player, self.other_player])
+            sign.draw(self.screen, self.camera)
+            
+        # Отрисовка игроков
+        self.my_player.draw(self.screen, self.camera)
+        self.other_player.draw(self.screen, self.camera)
         
-        if other_dialog_state["current_dialog_id"]:
-            self.dialog_system.reset_state()
-            self.dialog_system.start_dialog(
-                other_dialog_state["current_dialog_id"], 
-                self.my_player.character_name
-            )
-
-    def start_dialog(self, dialog_id):
-        """Начало диалога"""
-        if not self.dialog_system.dialog_completed:
-            self.dialog_system.start_dialog(dialog_id, self.my_player.character_name)
-            self.dialog_state["is_active"] = True
-            self.dialog_state["current_dialog_id"] = dialog_id
-            self.dialog_state["current_speaker"] = "alice"
-            self.send_data()
-
-    def end_dialog(self):
-        """Завершение диалога"""
-        self.dialog_system.complete_dialog()
-        self.dialog_state["is_active"] = False
-        self.dialog_state["current_dialog_id"] = None
-        self.dialog_state["current_speaker"] = None
-        self.dialog_state["dialog_completed"] = True
-        self.send_data()
-
-    def make_choice(self, choice_index):
-        """Обработка выбора варианта ответа"""
-        if not self.dialog_system.my_turn or not self.dialog_system.current_dialog:
-            return
-
-        if choice_index >= len(self.dialog_system.current_dialog.get("choices", [])):
-            return
-            
-        choice = self.dialog_system.current_dialog["choices"][choice_index]
-        next_dialog = choice.get("next")
-        
-        # Если это конец диалога
-        if next_dialog == "end":
-            self.end_dialog()
-            return
-
-        # Переход к следующему диалогу
-        if next_dialog and next_dialog in self.dialog_system.dialogs:
-            next_dialog_data = self.dialog_system.dialogs[next_dialog]
-            next_speaker = next_dialog_data.get("speaker")
-            
-            self.dialog_state["current_dialog_id"] = next_dialog
-            self.dialog_state["current_speaker"] = next_speaker
-            self.dialog_state["is_active"] = True
-            self.send_data()
-            
-            # Запускаем новый диалог
-            self.dialog_system.reset_state()
-            self.dialog_system.start_dialog(next_dialog, self.my_player.character_name)
-        else:
-            # Если следующего диалога нет, завершаем
-            self.end_dialog()
-
-    def check_dialog_trigger(self):
-        """Проверка возможности начать диалог"""
-        # Вычисляем расстояние между персонажами
-        distance = ((self.my_player.x - self.other_player.x) ** 2 + 
-                   (self.my_player.y - self.other_player.y) ** 2) ** 0.5
-        
-        # Если игроки достаточно близко и диалог не активен и не завершен
-        if (distance < DIALOG_TRIGGER_DISTANCE and 
-            not self.dialog_system.is_active and 
-            not self.dialog_system.dialog_completed and
-            self.my_player.character_name == "alice"):
-            
-                    self.start_dialog("start")
-
-    def handle_input(self, event):
-        """Обработка ввода для диалогов"""
-        if not self.dialog_system.is_active:
-            return
-
-        choice = self.dialog_system.handle_input(event, self.my_player.character_name)
-        if choice is not None:
-            print(f"Выбран вариант {choice + 1}")
-            self.make_choice(choice)
-
-    def draw_ui(self, screen):
-        """Отрисовка пользовательского интерфейса"""
-        # Показываем UI только после завершения диалога
-        if not self.dialog_system.dialog_completed:
-            return
-            
-        # Используем пиксельный шрифт
-        try:
-            pixel_font = pygame.font.Font(os.path.join("assets", "fonts", "visitor2.otf"), 20)
-        except:
-            # Fallback на системный шрифт
-            pixel_font = pygame.font.Font(None, 20)
-        
-        # Показываем количество собранных ключей
-        keys_text = pixel_font.render(f"Ключи: {self.collected_keys}/3", True, (255, 255, 255))
-        screen.blit(keys_text, (10, 10))
-        
-        # Показываем количество собранных зелий
-        potions_text = pixel_font.render(f"Зелья: {self.collected_potions}/3", True, (255, 255, 255))
-        screen.blit(potions_text, (10, 35))
-        
-        # Показываем прогресс и подсказки
-        if self.collected_keys == 3 and self.collected_potions == 3:
-            victory_text = pixel_font.render("Все предметы собраны! Найдите выход из норы!", True, (0, 255, 0))
-            screen.blit(victory_text, (10, SCREEN_HEIGHT - 30))
-        else:
-            hint_text = pixel_font.render("Соберите все предметы, чтобы активировать выход!", True, (255, 200, 0))
-            screen.blit(hint_text, (10, SCREEN_HEIGHT - 30))
-
-    def draw_background_with_parallax(self, screen):
-        """Отрисовывает многослойный фон с эффектом параллакса"""
-        # Вычисляем смещение для параллакса
-        parallax_factor_1 = 0.1  # Самый дальний слой
-        parallax_factor_2 = 0.3
-        parallax_factor_3 = 0.5
-        parallax_factor_4 = 0.7  # Ближайший слой
-        
-        # Вычисляем смещения
-        offset_1 = int(self.camera.scroll_x * parallax_factor_1)
-        offset_2 = int(self.camera.scroll_x * parallax_factor_2)
-        offset_3 = int(self.camera.scroll_x * parallax_factor_3)
-        offset_4 = int(self.camera.scroll_x * parallax_factor_4)
-        
-        # Отрисовываем слои с параллаксом
-        # Слой 1 - самый дальний
-        screen.blit(self.background['layer1'], (-offset_1, 0))
-        if offset_1 > 0:
-            screen.blit(self.background['layer1'], (SCREEN_WIDTH - offset_1, 0))
-        
-        # Слой 2
-        screen.blit(self.background['layer2'], (-offset_2, 0))
-        if offset_2 > 0:
-            screen.blit(self.background['layer2'], (SCREEN_WIDTH - offset_2, 0))
-        
-        # Слой 3
-        screen.blit(self.background['layer3'], (-offset_3, 0))
-        if offset_3 > 0:
-            screen.blit(self.background['layer3'], (SCREEN_WIDTH - offset_3, 0))
-        
-        # Слой 4 - ближайший
-        screen.blit(self.background['layer4'], (-offset_4, 0))
-        if offset_4 > 0:
-            screen.blit(self.background['layer4'], (SCREEN_WIDTH - offset_4, 0))
-
-    def run(self):
-        running = True
-        last_time = time.time()
-        while running:
-            current_time = time.time()
-            dt = current_time - last_time
-            last_time = current_time
-
-            # Получаем состояние клавиш
-            keys = pygame.key.get_pressed()
-
-            for event in pygame.event.get():
-                if event.type == pygame.QUIT:
-                    running = False
-                elif event.type == pygame.KEYDOWN:
-                    if (event.key == pygame.K_SPACE or event.key == pygame.K_w) and not self.dialog_system.is_active:
-                        self.my_player.jump()
-                    else:
-                        self.handle_input(event)
-
-            # Проверяем, есть ли активный диалог, блокирующий движение
-            allow_movement = True
-            if self.dialog_system.is_active:
-                allow_movement = False
-
-            # Обрабатываем нажатия клавиш - добавляем поддержку WASD
-            if allow_movement:
-                if keys[pygame.K_LEFT] or keys[pygame.K_a]:
-                    self.my_player.move(-1)
-                elif keys[pygame.K_RIGHT] or keys[pygame.K_d]:
-                    self.my_player.move(1)
-                else:
-                    self.my_player.move(0)
-            else:
-                self.my_player.move(0)
-
-            # Обновление физики и проверка диалога
-            # Передаем платформы игрокам для проверки коллизий
-            self.my_player._platforms = self.platforms + self.moving_platforms
-            self.other_player._platforms = self.platforms + self.moving_platforms
-            
-            self.my_player.update(self.platforms + self.moving_platforms)
-            self.other_player.update(self.platforms + self.moving_platforms)
-            
-            # Обновляем анимации ключей
-            for key in self.animated_keys:
-                key.update(dt)
-            
-            # Обновляем подвижные платформы
-            for platform in self.moving_platforms:
-                platform.update()
-            
-            # Обновляем знаки
-            for sign in self.signs:
-                sign.update([self.my_player, self.other_player])
-            
-            # Проверяем сбор ключей
-            collected = self.my_player.check_collectibles(self.animated_keys)
-            if collected:
-                self.collected_keys += len(collected)
-                print(f"Собрано ключей: {self.collected_keys}")
-            
-            # Проверяем сбор зелий
-            collected = self.my_player.check_collectibles(self.potions)
-            if collected:
-                self.collected_potions += len(collected)
-                print(f"Собрано зелий: {self.collected_potions}")
-            
-            # Проверяем активацию подвижных платформ
-            self.check_platform_activation()
-            
-            # Проверяем условие победы
-            self.check_victory_condition()
-            
-            self.check_dialog_trigger()
-
-            # Обновление камеры
-            next_x = self.my_player.x
-            next_y = self.my_player.y
-            if keys[pygame.K_LEFT]:
-                next_x -= self.my_player.move_speed * 5
-            elif keys[pygame.K_RIGHT]:
-                next_x += self.my_player.move_speed * 5
-            self.camera.update(next_x, next_y)
-
-            # Обновляем анимацию диалогов
-            self.dialog_system.update(dt)
-            
-            # Обновляем таймер победы
-            if self.victory_achieved:
-                self.victory_timer += dt
-
-            # Отправка данных
-            self.send_data()
-
-            # Отрисовка
-            # Отрисовываем фон пещеры с параллаксом
-            self.draw_background_with_parallax(self.screen)
-            
-            platform_y = SCREEN_HEIGHT - PLATFORM_HEIGHT
-            self.screen.blit(self.platform, (0, platform_y))
-            
-            # Отрисовываем дополнительные платформы
-            for platform in self.platforms:
-                platform.draw(self.screen, self.camera)
-            
-            # Отрисовываем подвижные платформы
-            for platform in self.moving_platforms:
-                platform.draw(self.screen, self.camera)
-            
-            # Отрисовываем предметы
-            for collectible in self.animated_keys:
-                collectible.draw(self.screen, self.camera)
-            for collectible in self.potions:
-                collectible.draw(self.screen, self.camera)
-            
-            # Отрисовываем фонари
-            for lamp in self.lamps:
-                lamp.draw(self.screen, self.camera)
-            
-            # Отрисовываем декорации
-            for decoration in self.decorations:
-                decoration.draw(self.screen, self.camera)
-            
-            # Отрисовываем знаки
-            for sign in self.signs:
-                sign.draw(self.screen, self.camera)
-            
-            # Находим Алису и Кролика
-            alice = self.my_player if self.my_player.character_name == "alice" else self.other_player
-            rabbit = self.other_player if self.my_player.character_name == "alice" else self.my_player
-            
-            # Сначала отрисовываем Кролика, потом Алису
-            rabbit.draw(self.screen, self.camera)
-            alice.draw(self.screen, self.camera)
-            
-            self.screen.blit(self.shadow, (0, 0))
-            self.dialog_system.draw(self.screen, self.my_player.character_name)
-            
-            self.draw_ui(self.screen)
-            
-            # Отрисовываем экран победы поверх всего
-            self.draw_victory_screen(self.screen)
-            
-            pygame.display.flip()
-            self.clock.tick(60)
-
-        pygame.quit()
-        self.socket.close()
-        sys.exit()
+        # Отрисовка теней и диалогов
+        self.screen.blit(self.shadow, (0, 0))
+        self.dialog_system.update(dt)
+        self.dialog_system.draw(self.screen, self.my_player.character_name)
 
 class Flag:
     def __init__(self, x, y, flag_type="top"):
@@ -2040,6 +1976,219 @@ class Sign:
                 pygame.draw.rect(screen, (139, 69, 19), (screen_x + self.width//2 - 2, screen_y + 30, 4, 18))
                 pygame.draw.rect(screen, (160, 82, 45), (screen_x + 4, screen_y + 8, 24, 16))
                 pygame.draw.rect(screen, (0, 0, 0), (screen_x + 4, screen_y + 8, 24, 16), 2)
+
+class StoryScreen:
+    def __init__(self):
+        self.font = None
+        self.story_timer = 0
+        self.current_stage = "waiting"  # waiting -> ready -> story -> game
+        self.story_images = []
+        self.story_texts = [
+            "Алиса сидела со старшей сестрой на берегу и маялась от безделья...",
+            "Вдруг мимо пробежал Белый Кролик с часами...",
+            "Алиса, недолго думая, побежала за ним...",
+            "И упала в глубокую-преглубокую нору..."
+        ]
+        self.current_text_index = 0
+        self.text_alpha = 0
+        self.lobby_text = "Ожидание второго игрока..."
+        self.ready_text = "Вот-вот начнется ваша история..."
+        self.lobby_text_progress = 0
+        self.dots_count = 0
+        self.dots_timer = 0
+        self.text_speed = 0.3
+        self.scene_duration = 8.0
+        self.ready_timer = 0
+        self.ready_duration = 3.0
+        self.text_box_width = SCREEN_WIDTH - 100
+        self.text_box_height = 150
+        self.transition_delay = 1.0  # Задержка перед переходом в игру
+        self.load_resources()
+
+    def update(self, dt):
+        """Обновляет состояние истории"""
+        if self.current_stage == "waiting":
+            # Анимация точек в ожидании
+            self.dots_timer += dt
+            if self.dots_timer >= 0.7:
+                self.dots_timer = 0
+                self.dots_count = (self.dots_count + 1) % 4
+            
+            # Анимация появления текста
+            self.lobby_text_progress = min(1.0, self.lobby_text_progress + dt * self.text_speed)
+            
+        elif self.current_stage == "ready":
+            self.ready_timer += dt
+            self.lobby_text_progress = min(1.0, self.lobby_text_progress + dt * self.text_speed)
+            if self.ready_timer >= self.ready_duration:
+                print("StoryScreen: Переход из ready в story")
+                self.current_stage = "story"
+                self.story_timer = 0
+                self.current_text_index = 0
+                
+        elif self.current_stage == "story":
+            self.story_timer += dt
+            
+            if self.story_timer >= self.scene_duration:
+                print(f"StoryScreen: Следующая сцена {self.current_text_index + 1}/{len(self.story_texts)}")
+                self.story_timer = 0
+                self.current_text_index += 1
+                self.text_alpha = 0
+                
+                # Проверяем, закончились ли все сцены
+                if self.current_text_index >= len(self.story_texts):
+                    print("StoryScreen: Все сцены показаны, ожидаем перед переходом в игру")
+                    self.story_timer = 0
+                    self.current_stage = "transition"
+            else:
+                self.text_alpha = min(255, int((self.story_timer / 2) * 255))
+                
+        elif self.current_stage == "transition":
+            self.story_timer += dt
+            if self.story_timer >= self.transition_delay:
+                print("StoryScreen: Переход в game")
+                self.current_stage = "game"
+
+    def draw(self, screen):
+        """Отрисовывает экран истории"""
+        if self.current_stage in ["waiting", "ready"]:
+            screen.fill((0, 0, 0))
+            
+            # Выбираем текст в зависимости от стадии
+            current_text = self.ready_text if self.current_stage == "ready" else self.lobby_text
+            
+            # Вычисляем видимую часть текста
+            visible_chars = int(len(current_text) * self.lobby_text_progress)
+            display_text = current_text[:visible_chars]
+            
+            # Добавляем анимированные точки только для waiting
+            if self.current_stage == "waiting":
+                display_text += "." * self.dots_count
+            
+            # Разбиваем текст на строки
+            lines = self.wrap_text(display_text, self.text_box_width)
+            
+            # Отрисовываем каждую строку
+            y = SCREEN_HEIGHT//2 - (len(lines) * 30)//2
+            for line in lines:
+                text = self.font.render(line, True, (255, 255, 255))
+                text_rect = text.get_rect(center=(SCREEN_WIDTH//2, y))
+                screen.blit(text, text_rect)
+                y += 30
+            
+        elif self.current_stage in ["story", "transition"]:
+            if self.current_text_index < len(self.story_images):
+                screen.blit(self.story_images[self.current_text_index], (0, 0))
+                
+            if self.current_text_index < len(self.story_texts):
+                full_text = self.story_texts[self.current_text_index]
+                text_progress = min(1.0, (self.story_timer * self.text_speed))
+                visible_chars = int(len(full_text) * text_progress)
+                current_text = full_text[:visible_chars]
+                
+                if current_text:
+                    # Создаем полупрозрачный фон для текста
+                    bg_rect = pygame.Rect(
+                        (SCREEN_WIDTH - self.text_box_width)//2,
+                        SCREEN_HEIGHT - self.text_box_height - 20,
+                        self.text_box_width,
+                        self.text_box_height
+                    )
+                    bg_surface = pygame.Surface((bg_rect.width, bg_rect.height), pygame.SRCALPHA)
+                    bg_surface.fill((0, 0, 0, 180))
+                    screen.blit(bg_surface, bg_rect)
+                    
+                    # Разбиваем текст на строки
+                    lines = self.wrap_text(current_text, self.text_box_width - 40)
+                    
+                    # Отрисовываем каждую строку
+                    y = bg_rect.y + 20
+                    for line in lines:
+                        text = self.font.render(line, True, (255, 255, 255))
+                        text.set_alpha(self.text_alpha)
+                        text_rect = text.get_rect(center=(SCREEN_WIDTH//2, y))
+                        screen.blit(text, text_rect)
+                        y += 30
+    
+    def sync_state(self, stage, text_index=0, timer=0):
+        """Синхронизирует состояние с другим клиентом"""
+        if stage != self.current_stage:
+            print(f"StoryScreen: Синхронизация - переход из {self.current_stage} в {stage}")
+            self.current_stage = stage
+            if stage == "ready":
+                self.ready_timer = 0
+                self.lobby_text_progress = 0
+            elif stage == "story":
+                self.current_text_index = text_index
+                self.story_timer = timer
+            elif stage == "game":
+                print("StoryScreen: Синхронизация - переход в игру")
+                self.current_text_index = len(self.story_texts)
+
+    def start_story(self):
+        """Запускает показ истории"""
+        self.current_stage = "ready"
+        self.ready_timer = 0
+        self.lobby_text_progress = 0
+
+    def load_resources(self):
+        """Загружает шрифт и картинки для истории"""
+        try:
+            self.font = pygame.font.Font(os.path.join("assets", "fonts", "visitor2.otf"), 36)
+        except:
+            self.font = pygame.font.Font(None, 36)
+            
+        # Загружаем картинки для истории
+        try:
+            for i in range(1, 5):  # 4 картинки для истории
+                # Пробуем загрузить jpg файл
+                try:
+                    image_path = os.path.join("assets", "story", f"story_{i}.jpg")
+                    image = pygame.image.load(image_path).convert()
+                except:
+                    # Если jpg не найден, пробуем png
+                    image_path = os.path.join("assets", "story", f"story_{i}.png")
+                    image = pygame.image.load(image_path).convert_alpha()
+                
+                image = pygame.transform.scale(image, (SCREEN_WIDTH, SCREEN_HEIGHT))
+                self.story_images.append(image)
+                print(f"Загружена картинка истории {i}: {image_path}")
+                
+        except Exception as e:
+            print(f"Ошибка загрузки картинок истории: {e}")
+            print("Проверьте наличие файлов .jpg или .png в папке assets/story/")
+            # Создаем пустые поверхности если картинки не найдены
+            for _ in range(4):
+                surface = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT))
+                surface.fill((0, 0, 0))
+                self.story_images.append(surface)
+
+    def wrap_text(self, text, max_width):
+        """Разбивает текст на строки, чтобы он помещался в заданную ширину"""
+        words = text.split()
+        lines = []
+        current_line = []
+        
+        for word in words:
+            # Пробуем добавить следующее слово
+            test_line = ' '.join(current_line + [word])
+            test_surface = self.font.render(test_line, True, (255, 255, 255))
+            
+            # Если текст не помещается, начинаем новую строку
+            if test_surface.get_width() > max_width:
+                if current_line:
+                    lines.append(' '.join(current_line))
+                    current_line = [word]
+                else:
+                    lines.append(word)
+            else:
+                current_line.append(word)
+        
+        # Добавляем последнюю строку
+        if current_line:
+            lines.append(' '.join(current_line))
+        
+        return lines
 
 if __name__ == "__main__":
     if len(sys.argv) != 2:

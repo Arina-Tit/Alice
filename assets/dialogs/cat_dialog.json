@@ -1,0 +1,73 @@
+{
+    "sign_dialog": {
+        "text": "Подойдите ближе... Вместе...",
+        "speaker": "sign",
+        "choices": [
+            {
+                "text": "Подойти к указателю",
+                "next": "cat_appears",
+                "speaker": "both"
+            }
+        ]
+    },
+    "cat_appears": {
+        "text": "Ах, какие интересные гости! Алиса и Белый Кролик...",
+        "speaker": "cat",
+        "choices": [
+            {
+                "text": "Кто ты?",
+                "next": "cat_intro",
+                "speaker": "alice"
+            }
+        ]
+    },
+    "cat_intro": {
+        "text": "Я - Чеширский Кот, хранитель загадок Страны Чудес. И у меня есть для вас испытание...",
+        "speaker": "cat",
+        "choices": [
+            {
+                "text": "Какое испытание?",
+                "next": "cat_riddle",
+                "speaker": "rabbit"
+            }
+        ]
+    },
+    "cat_riddle": {
+        "text": "Чтобы пройти дальше, вы должны разгадать мою загадку: Что растёт вверх корнями?",
+        "speaker": "cat",
+        "choices": [
+            {
+                "text": "Сосулька!",
+                "next": "cat_victory",
+                "speaker": "alice"
+            },
+            {
+                "text": "Дерево?",
+                "next": "cat_wrong",
+                "speaker": "rabbit"
+            }
+        ]
+    },
+    "cat_wrong": {
+        "text": "Неверно! Подумайте ещё...",
+        "speaker": "cat",
+        "choices": [
+            {
+                "text": "Попробовать снова",
+                "next": "cat_riddle",
+                "speaker": "both"
+            }
+        ]
+    },
+    "cat_victory": {
+        "text": "Правильно! Сосулька растёт сверху вниз, корнями вверх! Добро пожаловать в Страну Чудес!",
+        "speaker": "cat",
+        "choices": [
+            {
+                "text": "Спасибо!",
+                "next": "end",
+                "speaker": "both"
+            }
+        ]
+    }
+}

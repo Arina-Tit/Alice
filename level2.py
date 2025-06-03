@@ -8,9 +8,11 @@ import time
 import random
 import json
 import pygame.font
+import pygame.mixer  # Добавляем импорт для звука
 
 # Инициализация Pygame
 pygame.init()
+pygame.mixer.init()  # Инициализируем звуковую подсистему
 
 # Константы
 SCREEN_WIDTH = 800
@@ -68,6 +70,17 @@ SWITCH_COLOR = (255, 215, 0)
 DOOR_COLOR = (160, 82, 45)
 COLLECTIBLE_COLOR = (255, 20, 147)
 
+# Загрузка звуков
+try:
+    JUMP_SOUND = pygame.mixer.Sound(os.path.join("assets", "sounds", "jump.wav"))
+    COLLECT_SOUND = pygame.mixer.Sound(os.path.join("assets", "sounds", "keys_potions.wav"))
+    BACKGROUND_MUSIC = os.path.join("assets", "sounds", "level2.mp3")
+except Exception as e:
+    print(f"Ошибка загрузки звуков: {e}")
+    JUMP_SOUND = None
+    COLLECT_SOUND = None
+    BACKGROUND_MUSIC = None
+
 # Импортируем только необходимые классы из game.py
 from game import (SpriteSheet, Camera, Player, DialogSystem, Platform, 
                  AnimatedKey, Potion, Lamp, Decoration, MovingPlatform, Flag, Sign)
@@ -78,6 +91,19 @@ class Game:
         pygame.display.set_caption("P2P Game - Level 2")
         self.clock = pygame.time.Clock()
         self.camera = Camera(SCREEN_WIDTH, SCREEN_HEIGHT)
+        
+        # Настройка звука
+        try:
+            pygame.mixer.music.load(BACKGROUND_MUSIC)
+            pygame.mixer.music.set_volume(0.5)  # Устанавливаем громкость фоновой музыки
+            pygame.mixer.music.play(-1)  # -1 означает бесконечное воспроизведение
+            
+            if JUMP_SOUND:
+                JUMP_SOUND.set_volume(0.3)  # Устанавливаем громкость звука прыжка
+            if COLLECT_SOUND:
+                COLLECT_SOUND.set_volume(0.4)  # Устанавливаем громкость звука сбора предметов
+        except Exception as e:
+            print(f"Ошибка инициализации звука: {e}")
         
         # Флаг для контроля состояния сокета
         self.socket_active = True
@@ -657,6 +683,12 @@ class Game:
 
     def close(self):
         """Корректно закрываем игру и сетевое соединение"""
+        # Останавливаем музыку перед закрытием
+        try:
+            pygame.mixer.music.stop()
+        except:
+            pass
+            
         self.is_shutting_down = True
         self.socket_active = False
         

@@ -8,9 +8,26 @@ import time
 import random
 import json
 import pygame.font
+import pygame.mixer  # Добавляем импорт для звука
 
 # Инициализация Pygame
 pygame.init()
+pygame.mixer.init()  # Инициализируем звуковую подсистему
+
+# Загрузка звуков
+try:
+    JUMP_SOUND = pygame.mixer.Sound(os.path.join("assets", "sounds", "jump.wav"))
+    COLLECT_SOUND = pygame.mixer.Sound(os.path.join("assets", "sounds", "keys_potions.wav"))
+    BACKGROUND_MUSIC = os.path.join("assets", "sounds", "game.mp3")
+    
+    # Устанавливаем громкость
+    JUMP_SOUND.set_volume(0.3)
+    COLLECT_SOUND.set_volume(0.4)
+except Exception as e:
+    print(f"Ошибка загрузки звуков: {e}")
+    JUMP_SOUND = None
+    COLLECT_SOUND = None
+    BACKGROUND_MUSIC = None
 
 # Константы
 SCREEN_WIDTH = 800
@@ -284,9 +301,12 @@ class Player:
             self.sprites[self.current_state].reset_animation()
 
     def jump(self):
+        """Прыжок персонажа"""
         if not self.is_jumping:
             self.vel_y = self.jump_force
             self.is_jumping = True
+            if 'JUMP_SOUND' in globals() and JUMP_SOUND:
+                JUMP_SOUND.play()
 
     def update(self, platforms=None):
         self.vel_y += GRAVITY
@@ -350,7 +370,7 @@ class Player:
         return new_x
 
     def check_collectibles(self, collectibles):
-        
+        """Проверяет сбор предметов"""
         player_rect = pygame.Rect(self.x, self.y, self.width - self.offset, self.height - self.offset)
         collected_items = []
         
@@ -358,6 +378,8 @@ class Player:
             if not collectible.collected and player_rect.colliderect(collectible.rect):
                 if collectible.collect(self.character_name):
                     collected_items.append(collectible)
+                    if 'COLLECT_SOUND' in globals() and COLLECT_SOUND:
+                        COLLECT_SOUND.play()
         
         return collected_items
 
@@ -505,7 +527,7 @@ class DialogSystem:
         
         
         if self.show_exit_hint:
-            hint_text = "Теперь нужно найти выход из сада!"
+            hint_text = "Теперь нужно найти выход!"
             hint_surface = self.font.render(hint_text, True, DIALOG_PROMPT_COLOR)
             hint_x = (SCREEN_WIDTH - hint_surface.get_width()) // 2
             hint_y = SCREEN_HEIGHT // 2
@@ -1089,6 +1111,14 @@ class Game:
         pygame.display.set_caption("P2P Game")
         self.clock = pygame.time.Clock()
         self.camera = Camera(SCREEN_WIDTH, SCREEN_HEIGHT)
+        
+        # Настройка звука
+        try:
+            pygame.mixer.music.load(BACKGROUND_MUSIC)
+            pygame.mixer.music.set_volume(0.5)  # Устанавливаем громкость фоновой музыки
+            pygame.mixer.music.play(-1)  # -1 означает бесконечное воспроизведение
+        except Exception as e:
+            print(f"Ошибка инициализации звука: {e}")
         
         # Флаг для контроля состояния сокета
         self.socket_active = True
@@ -1686,7 +1716,12 @@ class Game:
 
     def close(self):
         """Корректно закрываем игру и сетевое соединение"""
-        # Устанавливаем флаг завершения работы
+        # Останавливаем музыку перед закрытием
+        try:
+            pygame.mixer.music.stop()
+        except:
+            pass
+            
         self.is_shutting_down = True
         self.socket_active = False
         

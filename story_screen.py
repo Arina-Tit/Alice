@@ -5,6 +5,10 @@ import threading
 import sys
 import os
 import time
+import pygame.mixer  # Добавляем импорт для звука
+
+# Инициализация звуковой подсистемы
+pygame.mixer.init()
 
 # Константы
 SCREEN_WIDTH = 800
@@ -36,6 +40,15 @@ class StoryScreen:
         self.text_box_width = SCREEN_WIDTH - 100
         self.text_box_height = 150
         self.transition_delay = 1.0
+        
+        # Инициализация музыки
+        try:
+            pygame.mixer.music.load(os.path.join("assets", "sounds", "story_screen.mp3"))
+            pygame.mixer.music.set_volume(0.5)  # Устанавливаем громкость фоновой музыки
+            pygame.mixer.music.play(-1)  # -1 означает бесконечное воспроизведение
+        except Exception as e:
+            print(f"Ошибка загрузки музыки: {e}")
+        
         self.load_resources()
 
     def update(self, dt):
@@ -74,6 +87,8 @@ class StoryScreen:
                     print("StoryScreen: Все сцены показаны, ожидаем перед переходом в игру")
                     self.story_timer = 0
                     self.current_stage = "transition"
+                    # Останавливаем музыку при переходе к игре
+                    pygame.mixer.music.stop()
             else:
                 self.text_alpha = min(255, int((self.story_timer / 2) * 255))
                 

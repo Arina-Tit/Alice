@@ -505,7 +505,7 @@ class DialogSystem:
         
         
         if self.show_exit_hint:
-            hint_text = "Теперь нужно найти выход из кроличьей норы!"
+            hint_text = "Теперь нужно найти выход из сада!"
             hint_surface = self.font.render(hint_text, True, DIALOG_PROMPT_COLOR)
             hint_x = (SCREEN_WIDTH - hint_surface.get_width()) // 2
             hint_y = SCREEN_HEIGHT // 2
@@ -1800,6 +1800,9 @@ class Game:
                 
                 if self.victory_achieved:
                     self.victory_timer += dt
+                    if self.victory_timer >= self.victory_duration:
+                        running = False
+                        break
             
                 if self.socket_active:
                     self.send_data()
@@ -1838,12 +1841,12 @@ class Game:
                 pygame.display.flip()
                 self.clock.tick(60)
         
-        except:
+        except Exception as e:
+            print(f"Ошибка в игровом цикле: {e}")
             self.is_shutting_down = True
         finally:
             self.close()
-            pygame.quit()
-           
+            return self.victory_achieved  # Возвращаем флаг победы
 
     def handle_input(self, event):
         """Обработка ввода для диалогов"""
@@ -1930,7 +1933,7 @@ class Game:
         
         # Показываем прогресс и подсказки
         if self.collected_keys == 3 and self.collected_potions == 3:
-            victory_text = pixel_font.render("Все предметы собраны! Найдите выход из норы!", True, (0, 255, 0))
+            victory_text = pixel_font.render("Все предметы собраны! Найдите выход из сада!", True, (0, 255, 0))
             screen.blit(victory_text, (10, SCREEN_HEIGHT - 30))
         else:
             hint_text = pixel_font.render("Соберите все предметы, чтобы активировать выход!", True, (255, 200, 0))

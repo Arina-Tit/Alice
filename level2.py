@@ -375,7 +375,7 @@ class Game:
             victory_text = pixel_font.render("Все предметы собраны! Найдите выход из сада!", True, (0, 255, 0))
             screen.blit(victory_text, (10, SCREEN_HEIGHT - 30))
         else:
-            hint_text = pixel_font.render("Соберите все предметы, чтобы найти выход!", True, (255, 200, 0))
+            hint_text = pixel_font.render("Соберите все предметы, чтобы найти выход из сада!", True, (255, 200, 0))
             screen.blit(hint_text, (10, SCREEN_HEIGHT - 30))
 
     def draw_background_with_parallax(self, screen):
@@ -417,6 +417,7 @@ class Game:
         if not self.victory_achieved:
             return
             
+        # Белый фон с плавным появлением
         white_surface = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT))
         white_surface.fill((255, 255, 255))
         white_alpha = min(255, int(self.victory_timer * 255))
@@ -429,23 +430,37 @@ class Game:
             except:
                 font = pygame.font.Font(None, 48)
             
-            full_text = "Новые приключения ждут!"
+            full_text = "Это была курсовая работа по дисциплине КСиС. Светлана Владимировна, простите за дедлайн."
             text_progress = min(1.0, (self.victory_timer - 1) * 0.5)
             visible_chars = int(len(full_text) * text_progress)
             current_text = full_text[:visible_chars]
             
             if current_text:
-                text = font.render(current_text, True, (0, 0, 0))
-                text_rect = text.get_rect(center=(SCREEN_WIDTH//2, SCREEN_HEIGHT//2))
-                screen.blit(text, text_rect)
-        
-        if self.victory_timer > 4 and self.smile_image:
-            smile_alpha = min(255, int((self.victory_timer - 4) * 255))
-            scaled_image = pygame.transform.scale(self.smile_image, (SCREEN_WIDTH, SCREEN_HEIGHT))
-            temp_surface = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
-            temp_surface.blit(scaled_image, (0, 0))
-            temp_surface.set_alpha(smile_alpha)
-            screen.blit(temp_surface, (0, 0))
+                # Разбиваем текст на строки для лучшей читаемости
+                words = current_text.split()
+                lines = []
+                current_line = []
+                
+                for word in words:
+                    current_line.append(word)
+                    test_line = ' '.join(current_line)
+                    test_surface = font.render(test_line, True, (0, 0, 0))
+                    if test_surface.get_width() > SCREEN_WIDTH - 100:  # отступ по 50 пикселей с каждой стороны
+                        current_line.pop()  # убираем последнее слово
+                        lines.append(' '.join(current_line))
+                        current_line = [word]
+                
+                if current_line:
+                    lines.append(' '.join(current_line))
+                
+                # Отрисовываем каждую строку по центру
+                total_height = len(lines) * font.get_linesize()
+                start_y = (SCREEN_HEIGHT - total_height) // 2
+                
+                for i, line in enumerate(lines):
+                    text_surface = font.render(line, True, (0, 0, 0))
+                    text_rect = text_surface.get_rect(center=(SCREEN_WIDTH//2, start_y + i * font.get_linesize()))
+                    screen.blit(text_surface, text_rect)
 
     def check_victory_condition(self):
         """Проверяет условие победы"""
@@ -791,11 +806,12 @@ class Game:
                 pygame.display.flip()
                 self.clock.tick(60)
         
-        except:
+        except Exception as e:
+            print(f"Ошибка в игровом цикле уровня 2: {e}")
             self.is_shutting_down = True
         finally:
             self.close()
-            pygame.quit()
+            return self.victory_achieved  # Возвращаем флаг победы
 
     def handle_input(self, event):
         """Обработка ввода для диалогов"""
